@@ -117,9 +117,13 @@ export default function DashboardPage() {
     const hasWash = selectedServices.wash;
     const hasDry = selectedServices.dry;
     const hasFold = selectedServices.fold;
-    if (hasFold && !hasWash && !hasDry) return false;
-    if (hasFold && !(hasWash && hasDry)) return false;
-    return hasWash || hasDry;
+
+    const isWashOnly = hasWash && !hasDry && !hasFold;
+    const isDryOnly = !hasWash && hasDry && !hasFold;
+    const isWashDry = hasWash && hasDry && !hasFold;
+    const isWashDryFold = hasWash && hasDry && hasFold;
+
+    return isWashOnly || isDryOnly || isWashDry || isWashDryFold;
   }, [selectedServices]);
 
   const resolvedSelectedServices = useMemo(() => {
@@ -174,7 +178,7 @@ export default function DashboardPage() {
     e.preventDefault();
     if (!customerId || weight <= 0) return;
     if (!isValidServiceCombo) {
-      setError('Invalid service combo. Allowed: Wash, Dry, Wash+Dry, or Wash+Dry+Fold.');
+      setError('Invalid service combo. Allowed: Wash only, Dry only, Wash + Dry, or Wash + Dry + Fold.');
       return;
     }
 
@@ -276,7 +280,7 @@ export default function DashboardPage() {
               ))}
             </div>
             {!isValidServiceCombo && (
-              <p className="text-xs text-red-600">Allowed: Wash, Dry, Wash+Dry, Wash+Dry+Fold. Fold requires both Wash and Dry.</p>
+              <p className="text-xs text-red-600">Allowed combinations: Wash only, Dry only, Wash + Dry, Wash + Dry + Fold.</p>
             )}
 
             <div className="grid grid-cols-2 gap-2">

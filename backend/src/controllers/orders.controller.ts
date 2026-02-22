@@ -36,7 +36,15 @@ export const createOrder = async (req: Request, res: Response) => {
   const hasWash = items.some((i) => (serviceNameMap.get(i.serviceId) ?? '').includes('wash'));
   const hasDry = items.some((i) => (serviceNameMap.get(i.serviceId) ?? '').includes('dry'));
   const hasFold = items.some((i) => (serviceNameMap.get(i.serviceId) ?? '').includes('fold'));
-  if (hasFold && !(hasWash && hasDry)) return fail(res, 400, 'Fold requires both wash and dry services');
+
+  const isWashOnly = hasWash && !hasDry && !hasFold;
+  const isDryOnly = !hasWash && hasDry && !hasFold;
+  const isWashDry = hasWash && hasDry && !hasFold;
+  const isWashDryFold = hasWash && hasDry && hasFold;
+
+  if (!(isWashOnly || isDryOnly || isWashDry || isWashDryFold)) {
+    return fail(res, 400, 'Invalid service combination. Allowed: wash, dry, wash+dry, wash+dry+fold');
+  }
 
   const orderItems = items.map((i) => {
     if (i.weight <= 0) throw new Error('Weight must be > 0');
