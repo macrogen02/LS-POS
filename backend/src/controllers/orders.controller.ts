@@ -25,7 +25,7 @@ export const getOrder = async (req: Request, res: Response) => {
 };
 
 export const createOrder = async (req: Request, res: Response) => {
-  const { customerId, items } = req.body as { customerId: string; items: Array<{ serviceId: string; weight: number }> };
+  const { customerId, items, initialStatus } = req.body as { customerId: string; items: Array<{ serviceId: string; weight: number }>; initialStatus?: OrderStatus };
   if (!customerId || !items?.length) return fail(res, 400, 'Invalid order payload');
   const serviceIds = items.map((i) => i.serviceId);
   const services = await prisma.service.findMany({ where: { id: { in: serviceIds } } });
@@ -41,9 +41,10 @@ export const createOrder = async (req: Request, res: Response) => {
   const isDryOnly = !hasWash && hasDry && !hasFold;
   const isWashDry = hasWash && hasDry && !hasFold;
   const isWashDryFold = hasWash && hasDry && hasFold;
+  const isDryFold = !hasWash && hasDry && hasFold;
 
-  if (!(isWashOnly || isDryOnly || isWashDry || isWashDryFold)) {
-    return fail(res, 400, 'Invalid service combination. Allowed: wash, dry, wash+dry, wash+dry+fold');
+  if (!(isWashOnly || isDryOnly || isWashDry || isWashDryFold || isDryFold)) {
+    return fail(res, 400, 'Invalid service combination. Allowed: wash, dry, wash+dry, dry+fold, wash+dry+fold');
   }
 
   const orderItems = items.map((i) => {
@@ -54,10 +55,18 @@ export const createOrder = async (req: Request, res: Response) => {
 
   const total = orderItems.reduce((acc, i) => acc + i.subtotal, 0);
 
+
+  let status: OrderStatus = 'pending';
+  if (initialStatus) {
+    if (!Object.values(OrderStatus).includes(initialStatus)) return fail(res, 400, 'Invalid initial status');
+    status = initialStatus;
+  }
+
   const order = await prisma.order.create({
     data: {
       customerId,
       totalPrice: total,
+      status,
       items: { create: orderItems }
     },
     include: { customer: true, items: { include: { service: true } }, payments: true }

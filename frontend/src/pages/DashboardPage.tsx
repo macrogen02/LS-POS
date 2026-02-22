@@ -138,8 +138,9 @@ export default function DashboardPage() {
     const isDryOnly = !hasWash && hasDry && !hasFold;
     const isWashDry = hasWash && hasDry && !hasFold;
     const isWashDryFold = hasWash && hasDry && hasFold;
+    const isDryFold = !hasWash && hasDry && hasFold;
 
-    return isWashOnly || isDryOnly || isWashDry || isWashDryFold;
+    return isWashOnly || isDryOnly || isWashDry || isWashDryFold || isDryFold;
   }, [selectedServices]);
 
   const resolvedSelectedServices = useMemo(() => {
@@ -187,7 +188,7 @@ export default function DashboardPage() {
     e.preventDefault();
     if (!customerId || weight <= 0) return;
     if (!isValidServiceCombo) {
-      setError('Invalid service combo. Allowed: Wash only, Dry only, Wash + Dry, or Wash + Dry + Fold.');
+      setError('Invalid service combo. Allowed: Wash only, Dry only, Wash + Dry, Dry + Fold, or Wash + Dry + Fold.');
       return;
     }
 
@@ -200,7 +201,9 @@ export default function DashboardPage() {
     setError('');
     try {
       const items = serviceIds.map((serviceId) => ({ serviceId, weight }));
-      const orderRes = await api.post('/orders', { customerId, items });
+      const hasWash = selectedServices.wash;
+      const initialStatus = hasWash ? 'pending' : 'completed';
+      const orderRes = await api.post('/orders', { customerId, items, initialStatus });
       const orderId = orderRes.data.data.id as string;
       const total = Number(orderRes.data.data.totalPrice);
       await api.post(`/orders/${orderId}/payments`, {
@@ -307,7 +310,7 @@ export default function DashboardPage() {
               ))}
             </div>
             {!isValidServiceCombo && (
-              <p className="text-xs text-red-600">Allowed combinations: Wash only, Dry only, Wash + Dry, Wash + Dry + Fold.</p>
+              <p className="text-xs text-red-600">Allowed combinations: Wash only, Dry only, Wash + Dry, Dry + Fold, Wash + Dry + Fold.</p>
             )}
 
             <div className="grid grid-cols-2 gap-2">
