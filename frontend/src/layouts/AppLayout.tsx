@@ -2,9 +2,6 @@ import { Link, Outlet } from 'react-router-dom';
 
 const navItems = [
   { label: 'Dashboard', to: '/dashboard' },
-  { label: 'Orders', to: '/orders' },
-  { label: 'New Order', to: '/orders/new' },
-  { label: 'Customers', to: '/customers' },
   { label: 'Inventory', to: '/inventory' },
   { label: 'Reports', to: '/reports' },
   { label: 'Staff', to: '/staff' }
