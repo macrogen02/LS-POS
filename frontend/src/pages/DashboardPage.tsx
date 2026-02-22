@@ -122,10 +122,24 @@ export default function DashboardPage() {
     return hasWash || hasDry;
   }, [selectedServices]);
 
+  const resolvedSelectedServices = useMemo(() => {
+    const lower = services.map((service) => ({ ...service, lowerName: service.name.trim().toLowerCase() }));
+
+    const findService = (key: ServiceKey) =>
+      lower.find((service) => service.lowerName === key) ??
+      lower.find((service) => service.lowerName.includes(key));
+
+    return selectedServiceKeys
+      .map((key) => findService(key))
+      .filter((service, index, arr): service is (Service & { lowerName: string }) =>
+        Boolean(service) && arr.findIndex((item) => item?.id === service?.id) === index
+      );
+  }, [selectedServiceKeys, services]);
+
   const estimatedPrice = useMemo(() => {
-    const rate = serviceButtons.filter((s) => selectedServices[s.key]).reduce((sum, s) => sum + s.rate, 0);
+    const rate = resolvedSelectedServices.reduce((sum, service) => sum + Number(service.pricePerKg), 0);
     return (rate * weight).toFixed(2);
-  }, [selectedServices, weight]);
+  }, [resolvedSelectedServices, weight]);
 
   const smsNotifications = useMemo(
     () =>
@@ -154,12 +168,7 @@ export default function DashboardPage() {
     await loadDashboard();
   };
 
-  const resolveServiceIds = () => {
-    const idByName = new Map(services.map((service) => [service.name.trim().toLowerCase(), service.id]));
-    return selectedServiceKeys
-      .map((key) => idByName.get(key))
-      .filter((id): id is string => Boolean(id));
-  };
+  const resolveServiceIds = () => resolvedSelectedServices.map((service) => service.id);
 
   const createOrder = async (e: FormEvent) => {
     e.preventDefault();
@@ -170,7 +179,7 @@ export default function DashboardPage() {
     }
 
     const serviceIds = resolveServiceIds();
-    if (!serviceIds.length) {
+    if (serviceIds.length !== selectedServiceKeys.length) {
       setError('Service setup missing. Please seed exact services: Wash, Dry, Fold.');
       return;
     }
@@ -180,8 +189,9 @@ export default function DashboardPage() {
       const items = serviceIds.map((serviceId) => ({ serviceId, weight }));
       const orderRes = await api.post('/orders', { customerId, items });
       const orderId = orderRes.data.data.id as string;
+      const total = Number(orderRes.data.data.totalPrice);
       await api.post(`/orders/${orderId}/payments`, {
-        amount: Number(estimatedPrice),
+        amount: total,
         method: paymentMethod
       });
       await loadDashboard();
@@ -261,7 +271,7 @@ export default function DashboardPage() {
                   className={`py-2 ${selectedServices[service.key] ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}
                 >
                   <div>{service.label}</div>
-                  <div>₱{service.rate}/kg</div>
+                  <div>₱{resolvedSelectedServices.find((s) => s.lowerName === service.key)?.pricePerKg ?? service.rate}/kg</div>
                 </button>
               ))}
             </div>
