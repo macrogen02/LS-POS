@@ -201,9 +201,7 @@ export default function DashboardPage() {
     setError('');
     try {
       const items = serviceIds.map((serviceId) => ({ serviceId, weight }));
-      const hasWash = selectedServices.wash;
-      const initialStatus = hasWash ? 'pending' : 'completed';
-      const orderRes = await api.post('/orders', { customerId, items, initialStatus });
+      const orderRes = await api.post('/orders', { customerId, items });
       const orderId = orderRes.data.data.id as string;
       const total = Number(orderRes.data.data.totalPrice);
       await api.post(`/orders/${orderId}/payments`, {
@@ -217,19 +215,26 @@ export default function DashboardPage() {
     }
   };
 
-  const nextStatus = (status: OrderStatus): OrderStatus | null => {
-    if (status === 'pending') return 'washing';
-    if (status === 'washing') return 'completed';
-    if (status === 'completed') return 'ready';
-    if (status === 'ready') return 'collected';
+  const hasWashService = (order: Order) => {
+    return order.items.some((item) => {
+      const name = item.service?.name?.trim().toLowerCase() ?? '';
+      return name === 'wash' || name.includes('wash');
+    });
+  };
+
+  const nextStatus = (order: Order): OrderStatus | null => {
+    if (order.status === 'pending') return hasWashService(order) ? 'washing' : 'completed';
+    if (order.status === 'washing') return 'completed';
+    if (order.status === 'completed') return 'ready';
+    if (order.status === 'ready') return 'collected';
     return null;
   };
 
-  const actionLabel = (status: OrderStatus) => {
-    if (status === 'pending') return 'Start Washing';
-    if (status === 'washing') return 'Move to Drying';
-    if (status === 'completed') return 'Mark as Ready';
-    if (status === 'ready') return 'Hand-over to Customer';
+  const actionLabel = (order: Order) => {
+    if (order.status === 'pending') return hasWashService(order) ? 'Start Washing' : 'Move to Drying';
+    if (order.status === 'washing') return 'Move to Drying';
+    if (order.status === 'completed') return 'Mark as Ready';
+    if (order.status === 'ready') return 'Hand-over to Customer';
     return '';
   };
 
@@ -252,7 +257,7 @@ export default function DashboardPage() {
   };
 
   const advanceOrder = async (order: Order) => {
-    const target = nextStatus(order.status);
+    const target = nextStatus(order);
     if (!target) return;
     setBusyOrderId(order.id);
     setError('');
@@ -360,13 +365,13 @@ export default function DashboardPage() {
                         <p>{order.customer?.name ?? 'Walk-in'}</p>
                         <p>{summarizeOrderServices(order)}</p>
                         <p>₱{Number(order.totalPrice).toFixed(2)}</p>
-                        {nextStatus(order.status) && (
+                        {nextStatus(order) && (
                           <button
                             className="mt-1 w-full bg-slate-800 text-white py-1 rounded"
                             disabled={busyOrderId === order.id}
                             onClick={() => advanceOrder(order)}
                           >
-                            {actionLabel(order.status)}
+                            {actionLabel(order)}
                           </button>
                         )}
                       </article>
