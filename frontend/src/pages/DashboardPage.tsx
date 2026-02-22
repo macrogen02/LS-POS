@@ -155,12 +155,9 @@ export default function DashboardPage() {
   };
 
   const resolveServiceIds = () => {
-    const findByName = (needle: string) =>
-      services.find((service) => service.name.toLowerCase() === needle.toLowerCase())?.id ??
-      services.find((service) => service.name.toLowerCase().includes(needle.toLowerCase()))?.id;
-
+    const idByName = new Map(services.map((service) => [service.name.trim().toLowerCase(), service.id]));
     return selectedServiceKeys
-      .map((key) => findByName(key))
+      .map((key) => idByName.get(key))
       .filter((id): id is string => Boolean(id));
   };
 
@@ -174,7 +171,7 @@ export default function DashboardPage() {
 
     const serviceIds = resolveServiceIds();
     if (!serviceIds.length) {
-      setError('Service setup missing. Please seed services (Wash, Dry, Fold) first.');
+      setError('Service setup missing. Please seed exact services: Wash, Dry, Fold.');
       return;
     }
 
@@ -269,7 +266,7 @@ export default function DashboardPage() {
               ))}
             </div>
             {!isValidServiceCombo && (
-              <p className="text-xs text-red-600">Fold cannot be selected alone. Allowed: Wash, Dry, Wash+Dry, Wash+Dry+Fold.</p>
+              <p className="text-xs text-red-600">Allowed: Wash, Dry, Wash+Dry, Wash+Dry+Fold. Fold requires both Wash and Dry.</p>
             )}
 
             <div className="grid grid-cols-2 gap-2">

@@ -33,12 +33,10 @@ export const createOrder = async (req: Request, res: Response) => {
 
 
   const serviceNameMap = new Map(services.map((s) => [s.id, s.name.toLowerCase()]));
-  const hasWashOrDry = items.some((i) => {
-    const name = serviceNameMap.get(i.serviceId) ?? '';
-    return name.includes('wash') || name.includes('dry');
-  });
+  const hasWash = items.some((i) => (serviceNameMap.get(i.serviceId) ?? '').includes('wash'));
+  const hasDry = items.some((i) => (serviceNameMap.get(i.serviceId) ?? '').includes('dry'));
   const hasFold = items.some((i) => (serviceNameMap.get(i.serviceId) ?? '').includes('fold'));
-  if (hasFold && !hasWashOrDry) return fail(res, 400, 'Fold-only orders are not allowed');
+  if (hasFold && !(hasWash && hasDry)) return fail(res, 400, 'Fold requires both wash and dry services');
 
   const orderItems = items.map((i) => {
     if (i.weight <= 0) throw new Error('Weight must be > 0');
@@ -68,7 +66,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
   if (!order) return fail(res, 404, 'Not Found');
 
   const paidAmount = order.payments.reduce((acc, p) => acc + Number(p.amount), 0);
-  if (status === 'completed' && paidAmount < Number(order.totalPrice)) return fail(res, 400, 'Order cannot be completed without full payment');
+  if (status === 'collected' && paidAmount < Number(order.totalPrice)) return fail(res, 400, 'Order cannot be collected without full payment');
   if (status === 'collected' && !['completed', 'ready'].includes(order.status)) return fail(res, 400, 'Cannot collect order if status is not completed or ready');
 
   const updated = await prisma.order.update({ where: { id: req.params.id }, data: { status } });
