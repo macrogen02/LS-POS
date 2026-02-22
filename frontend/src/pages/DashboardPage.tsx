@@ -2,20 +2,11 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../services/api';
 
 type OrderStatus = 'pending' | 'washing' | 'ready' | 'completed' | 'collected';
+type WorkflowLane = 'pending' | 'washing' | 'drying' | 'ready' | 'picked_up';
 type PaymentMethod = 'cash' | 'card' | 'online';
 
-type Customer = {
-  id: string;
-  name: string;
-  phone?: string;
-};
-
-type Service = {
-  id: string;
-  name: string;
-  pricePerKg: number | string;
-};
-
+type Customer = { id: string; name: string; phone?: string };
+type Service = { id: string; name: string; pricePerKg: number | string };
 type Order = {
   id: string;
   status: OrderStatus;
@@ -25,7 +16,21 @@ type Order = {
   items: Array<{ service?: { id: string; name: string } }>;
 };
 
-const workflowOrder: OrderStatus[] = ['pending', 'washing', 'ready', 'completed', 'collected'];
+const lanes: Array<{ key: WorkflowLane; label: string }> = [
+  { key: 'pending', label: 'Pending' },
+  { key: 'washing', label: 'Washing' },
+  { key: 'drying', label: 'Drying' },
+  { key: 'ready', label: 'Ready' },
+  { key: 'picked_up', label: 'Picked up' }
+];
+
+const laneByStatus: Record<OrderStatus, WorkflowLane> = {
+  pending: 'pending',
+  washing: 'washing',
+  completed: 'drying',
+  ready: 'ready',
+  collected: 'picked_up'
+};
 
 export default function DashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -66,11 +71,7 @@ export default function DashboardPage() {
       return;
     }
 
-    const [dailyRes, monthlyRes] = await Promise.allSettled([
-      api.get('/reports/daily-sales'),
-      api.get('/reports/monthly-revenue')
-    ]);
-
+    const [dailyRes, monthlyRes] = await Promise.allSettled([api.get('/reports/daily-sales'), api.get('/reports/monthly-revenue')]);
     setDailySales(dailyRes.status === 'fulfilled' ? Number(dailyRes.value.data.data.total ?? 0) : 0);
     setMonthlyRevenue(monthlyRes.status === 'fulfilled' ? Number(monthlyRes.value.data.data.total ?? 0) : 0);
   }, [customerId, serviceId]);
@@ -79,16 +80,9 @@ export default function DashboardPage() {
     loadDashboard();
   }, [loadDashboard]);
 
-  const byStatus = useMemo(() => {
-    const group: Record<OrderStatus, Order[]> = {
-      pending: [],
-      washing: [],
-      ready: [],
-      completed: [],
-      collected: []
-    };
-
-    orders.forEach((order) => group[order.status]?.push(order));
+  const byLane = useMemo(() => {
+    const group: Record<WorkflowLane, Order[]> = { pending: [], washing: [], drying: [], ready: [], picked_up: [] };
+    orders.forEach((order) => group[laneByStatus[order.status]].push(order));
     return group;
   }, [orders]);
 
@@ -108,12 +102,15 @@ export default function DashboardPage() {
     return (Number(service?.pricePerKg ?? 0) * weight).toFixed(2);
   }, [serviceId, services, weight]);
 
-  const loyaltyRows = useMemo(() => {
-    return customers.map((customer) => {
-      const orderCount = orders.filter((order) => order.customer?.id === customer.id).length;
-      return { ...customer, orderCount, points: orderCount * 2 };
-    });
-  }, [customers, orders]);
+  const smsNotifications = useMemo(
+    () => byLane.ready.map((order) => `SMS sent to ${order.customer?.name ?? 'customer'}: Your order ${order.id.slice(0, 6).toUpperCase()} is ready for pickup.`),
+    [byLane.ready]
+  );
+
+  const loyaltyRows = useMemo(() => customers.map((customer) => {
+    const orderCount = orders.filter((order) => order.customer?.id === customer.id).length;
+    return { ...customer, orderCount, points: orderCount * 2 };
+  }), [customers, orders]);
 
   const addCustomer = async (e: FormEvent) => {
     e.preventDefault();
@@ -139,11 +136,29 @@ export default function DashboardPage() {
     }
   };
 
-  const updateStatus = async (orderId: string, nextStatus: OrderStatus) => {
-    setBusyOrderId(orderId);
+  const nextStatus = (status: OrderStatus): OrderStatus | null => {
+    if (status === 'pending') return 'washing';
+    if (status === 'washing') return 'completed';
+    if (status === 'completed') return 'ready';
+    if (status === 'ready') return 'collected';
+    return null;
+  };
+
+  const actionLabel = (status: OrderStatus) => {
+    if (status === 'pending') return 'Start Washing';
+    if (status === 'washing') return 'Move to Drying';
+    if (status === 'completed') return 'Mark as Ready';
+    if (status === 'ready') return 'Hand-over to Customer';
+    return '';
+  };
+
+  const advanceOrder = async (order: Order) => {
+    const target = nextStatus(order.status);
+    if (!target) return;
+    setBusyOrderId(order.id);
     setError('');
     try {
-      await api.put(`/orders/${orderId}/status`, { status: nextStatus });
+      await api.put(`/orders/${order.id}/status`, { status: target });
       await loadDashboard();
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message;
@@ -163,34 +178,25 @@ export default function DashboardPage() {
             <h2 className="text-3xl font-bold leading-none">Laundry POS</h2>
             <p className="text-slate-500 mt-2">New order, instant pricing, and payment capture.</p>
           </div>
-
           <form onSubmit={addCustomer} className="bg-slate-100 rounded-xl p-3 grid grid-cols-2 gap-2">
             <input value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} placeholder="Customer name" className="bg-white" />
             <input value={newCustomerPhone} onChange={(e) => setNewCustomerPhone(e.target.value)} placeholder="Cellphone number" className="bg-white" />
             <button className="col-span-2 bg-slate-200">Add New Customer</button>
           </form>
-
           <form onSubmit={createOrder} className="space-y-2">
             <label className="block text-sm">Customer</label>
             <select className="w-full" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
               {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` (${c.phone})` : ''}</option>)}
             </select>
-
             <label className="block text-sm">Services</label>
             <div className="grid grid-cols-3 gap-2">
               {services.slice(0, 3).map((service) => (
-                <button
-                  key={service.id}
-                  type="button"
-                  onClick={() => setServiceId(service.id)}
-                  className={`py-2 ${serviceId === service.id ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}
-                >
+                <button key={service.id} type="button" onClick={() => setServiceId(service.id)} className={`py-2 ${serviceId === service.id ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}>
                   <div>{service.name}</div>
                   <div>₱{Number(service.pricePerKg)}/kg</div>
                 </button>
               ))}
             </div>
-
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-sm">Weight (kg)</label>
@@ -199,18 +205,11 @@ export default function DashboardPage() {
               <div>
                 <label className="block text-sm">Payment</label>
                 <select className="w-full" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}>
-                  <option value="cash">Cash</option>
-                  <option value="card">Card</option>
-                  <option value="online">Online</option>
+                  <option value="cash">Cash</option><option value="card">Card</option><option value="online">Online</option>
                 </select>
               </div>
             </div>
-
-            <div className="bg-slate-100 rounded-xl p-3">
-              <p className="text-slate-500">Auto-calculated price</p>
-              <p className="text-3xl font-bold">₱{estimatedPrice}</p>
-            </div>
-
+            <div className="bg-slate-100 rounded-xl p-3"><p className="text-slate-500">Auto-calculated price</p><p className="text-3xl font-bold">₱{estimatedPrice}</p></div>
             <button className="w-full bg-indigo-600 text-white py-2">Create Order + Record Payment</button>
           </form>
         </section>
@@ -220,43 +219,38 @@ export default function DashboardPage() {
             <MetricCard title="Daily Sales" value={`₱${dailySales.toFixed(2)}`} />
             <MetricCard title="Monthly Sales (est.)" value={`₱${monthlyRevenue.toFixed(2)}`} />
             <MetricCard title="Top Service" value={topService} />
-            <MetricCard title="Ready for Pickup" value={`${byStatus.ready.length}`} />
-            <MetricCard title="Picked up" value={`${byStatus.collected.length}`} />
+            <MetricCard title="Ready for Pickup" value={`${byLane.ready.length}`} />
+            <MetricCard title="Picked up" value={`${byLane.picked_up.length}`} />
           </div>
 
           <div className="bg-white rounded-xl p-4 shadow-sm">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="text-3xl font-bold leading-none">Laundry Workflow</h3>
-              <button className="bg-slate-800 text-white px-2 py-1 text-sm" onClick={loadDashboard}>Refresh</button>
-            </div>
+            <h3 className="text-2xl font-bold mb-3">Laundry Workflow</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
-              {workflowOrder.map((status) => (
-                <div key={status} className="bg-slate-100 rounded-lg p-2 min-h-[240px]">
-                  <div className="flex justify-between mb-2">
-                    <h4 className="font-medium capitalize">{status}</h4>
-                    <span className="text-xs">{byStatus[status].length}</span>
-                  </div>
+              {lanes.map((lane) => (
+                <div key={lane.key} className="bg-slate-100 rounded-lg p-2 min-h-[240px]">
+                  <h4 className="font-medium mb-2">{lane.label}</h4>
                   <div className="space-y-2">
-                    {byStatus[status].map((order) => {
+                    {byLane[lane.key].map((order) => {
                       const paid = order.payments.reduce((acc, p) => acc + Number(p.amount), 0);
                       return (
                         <article key={order.id} className="bg-white border rounded p-2 text-sm leading-tight">
-                          <p className="font-medium">{order.id.slice(0, 6).toUpperCase()}</p>
+                          <p className="font-medium">L-{order.id.slice(0, 4).toUpperCase()}</p>
                           <p>{order.customer?.name ?? 'Walk-in'}</p>
+                          <p>{order.items[0]?.service?.name ?? 'Laundry Service'}</p>
                           <p>₱{Number(order.totalPrice).toFixed(2)}</p>
-                          <p className="text-slate-500">Paid: ₱{paid.toFixed(2)}</p>
-                          <select
-                            className="w-full mt-1"
-                            value={order.status}
-                            onChange={(e) => updateStatus(order.id, e.target.value as OrderStatus)}
-                            disabled={busyOrderId === order.id}
-                          >
-                            {workflowOrder.map((next) => <option key={next} value={next}>{next}</option>)}
-                          </select>
+                          {nextStatus(order.status) && (
+                            <button
+                              className="mt-1 w-full bg-slate-800 text-white py-1 rounded"
+                              disabled={busyOrderId === order.id}
+                              onClick={() => advanceOrder(order)}
+                            >
+                              {actionLabel(order.status)}
+                            </button>
+                          )}
                         </article>
                       );
                     })}
-                    {!byStatus[status].length && <p className="text-xs text-slate-500">No orders</p>}
+                    {!byLane[lane.key].length && <p className="text-xs text-slate-500">No orders</p>}
                   </div>
                 </div>
               ))}
@@ -264,32 +258,18 @@ export default function DashboardPage() {
           </div>
 
           <div className="bg-white rounded-xl p-4 shadow-sm">
-            <h3 className="text-2xl font-bold leading-none">SMS Notifications (Auto on Ready)</h3>
-            <p className="text-slate-500 mt-2">No SMS sent yet.</p>
+            <h3 className="text-2xl font-bold">SMS Notifications (Auto on Ready)</h3>
+            <div className="mt-2 text-slate-500 text-sm space-y-1">
+              {smsNotifications.length ? smsNotifications.map((msg) => <p key={msg}>{msg}</p>) : <p>No SMS sent yet.</p>}
+            </div>
           </div>
 
           <div className="bg-white rounded-xl p-4 shadow-sm">
-            <h3 className="text-2xl font-bold leading-none">Customers & Loyalty</h3>
+            <h3 className="text-2xl font-bold">Customers & Loyalty</h3>
             <div className="overflow-x-auto mt-2">
               <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left border-b">
-                    <th className="py-1">Name</th>
-                    <th className="py-1">Phone</th>
-                    <th className="py-1">Orders</th>
-                    <th className="py-1">Loyalty Points</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loyaltyRows.map((row) => (
-                    <tr key={row.id} className="border-b">
-                      <td className="py-1">{row.name}</td>
-                      <td className="py-1">{row.phone ?? '-'}</td>
-                      <td className="py-1">{row.orderCount}</td>
-                      <td className="py-1">{row.points}</td>
-                    </tr>
-                  ))}
-                </tbody>
+                <thead><tr className="text-left border-b"><th className="py-1">Name</th><th className="py-1">Phone</th><th className="py-1">Orders</th><th className="py-1">Loyalty Points</th></tr></thead>
+                <tbody>{loyaltyRows.map((row) => <tr key={row.id} className="border-b"><td className="py-1">{row.name}</td><td className="py-1">{row.phone ?? '-'}</td><td className="py-1">{row.orderCount}</td><td className="py-1">{row.points}</td></tr>)}</tbody>
               </table>
             </div>
           </div>
@@ -300,10 +280,5 @@ export default function DashboardPage() {
 }
 
 function MetricCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="bg-white rounded-xl p-3 shadow-sm">
-      <p className="text-slate-500 text-sm">{title}</p>
-      <p className="text-4xl font-bold mt-1 leading-none">{value}</p>
-    </div>
-  );
+  return <div className="bg-white rounded-xl p-3 shadow-sm"><p className="text-slate-500 text-sm">{title}</p><p className="text-4xl font-bold mt-1 leading-none">{value}</p></div>;
 }

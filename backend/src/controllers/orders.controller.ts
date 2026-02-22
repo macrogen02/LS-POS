@@ -60,7 +60,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
 
   const paidAmount = order.payments.reduce((acc, p) => acc + Number(p.amount), 0);
   if (status === 'completed' && paidAmount < Number(order.totalPrice)) return fail(res, 400, 'Order cannot be completed without full payment');
-  if (status === 'collected' && order.status !== 'completed') return fail(res, 400, 'Cannot collect order if status is not completed');
+  if (status === 'collected' && !['completed', 'ready'].includes(order.status)) return fail(res, 400, 'Cannot collect order if status is not completed or ready');
 
   const updated = await prisma.order.update({ where: { id: req.params.id }, data: { status } });
 
