@@ -20,6 +20,9 @@ async function main() {
   });
 
   for (const service of [
+    { name: 'Wash', pricePerKg: 3.0 },
+    { name: 'Dry', pricePerKg: 2.0 },
+    { name: 'Fold', pricePerKg: 1.5 },
     { name: 'Wash & Fold', pricePerKg: 5.0 },
     { name: 'Dry Clean', pricePerKg: 8.5 },
     { name: 'Iron Only', pricePerKg: 3.0 }

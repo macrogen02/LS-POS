@@ -4,6 +4,7 @@ import api from '../services/api';
 type OrderStatus = 'pending' | 'washing' | 'ready' | 'completed' | 'collected';
 type WorkflowLane = 'pending' | 'washing' | 'drying' | 'ready' | 'picked_up';
 type PaymentMethod = 'cash' | 'card' | 'online';
+type ServiceKey = 'wash' | 'dry' | 'fold';
 
 type Customer = { id: string; name: string; phone?: string };
 type Service = { id: string; name: string; pricePerKg: number | string };
@@ -32,6 +33,12 @@ const laneByStatus: Record<OrderStatus, WorkflowLane> = {
   collected: 'picked_up'
 };
 
+const serviceButtons: Array<{ key: ServiceKey; label: string; rate: number }> = [
+  { key: 'wash', label: 'Wash', rate: 3 },
+  { key: 'dry', label: 'Dry', rate: 2 },
+  { key: 'fold', label: 'Fold', rate: 1.5 }
+];
+
 export default function DashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -44,7 +51,11 @@ export default function DashboardPage() {
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [customerId, setCustomerId] = useState('');
-  const [serviceId, setServiceId] = useState('');
+  const [selectedServices, setSelectedServices] = useState<Record<ServiceKey, boolean>>({
+    wash: true,
+    dry: false,
+    fold: false
+  });
   const [weight, setWeight] = useState(3);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
 
@@ -58,23 +69,23 @@ export default function DashboardPage() {
       ]);
 
       const fetchedCustomers: Customer[] = customersRes.data.data;
-      const fetchedServices: Service[] = servicesRes.data.data;
-
       setOrders(ordersRes.data.data.items);
       setCustomers(fetchedCustomers);
-      setServices(fetchedServices);
+      setServices(servicesRes.data.data);
 
       if (!customerId && fetchedCustomers[0]) setCustomerId(fetchedCustomers[0].id);
-      if (!serviceId && fetchedServices[0]) setServiceId(fetchedServices[0].id);
     } catch {
       setError('Unable to load workflow data. Check backend connection.');
       return;
     }
 
-    const [dailyRes, monthlyRes] = await Promise.allSettled([api.get('/reports/daily-sales'), api.get('/reports/monthly-revenue')]);
+    const [dailyRes, monthlyRes] = await Promise.allSettled([
+      api.get('/reports/daily-sales'),
+      api.get('/reports/monthly-revenue')
+    ]);
     setDailySales(dailyRes.status === 'fulfilled' ? Number(dailyRes.value.data.data.total ?? 0) : 0);
     setMonthlyRevenue(monthlyRes.status === 'fulfilled' ? Number(monthlyRes.value.data.data.total ?? 0) : 0);
-  }, [customerId, serviceId]);
+  }, [customerId]);
 
   useEffect(() => {
     loadDashboard();
@@ -97,20 +108,42 @@ export default function DashboardPage() {
     return [...counter.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'N/A';
   }, [orders]);
 
+  const selectedServiceKeys = useMemo(
+    () => (Object.keys(selectedServices) as ServiceKey[]).filter((key) => selectedServices[key]),
+    [selectedServices]
+  );
+
+  const isValidServiceCombo = useMemo(() => {
+    const hasWash = selectedServices.wash;
+    const hasDry = selectedServices.dry;
+    const hasFold = selectedServices.fold;
+    if (hasFold && !hasWash && !hasDry) return false;
+    if (hasFold && !(hasWash && hasDry)) return false;
+    return hasWash || hasDry;
+  }, [selectedServices]);
+
   const estimatedPrice = useMemo(() => {
-    const service = services.find((s) => s.id === serviceId);
-    return (Number(service?.pricePerKg ?? 0) * weight).toFixed(2);
-  }, [serviceId, services, weight]);
+    const rate = serviceButtons.filter((s) => selectedServices[s.key]).reduce((sum, s) => sum + s.rate, 0);
+    return (rate * weight).toFixed(2);
+  }, [selectedServices, weight]);
 
   const smsNotifications = useMemo(
-    () => byLane.ready.map((order) => `SMS sent to ${order.customer?.name ?? 'customer'}: Your order ${order.id.slice(0, 6).toUpperCase()} is ready for pickup.`),
+    () =>
+      byLane.ready.map(
+        (order) =>
+          `SMS sent to ${order.customer?.name ?? 'customer'}: Your order ${order.id.slice(0, 6).toUpperCase()} is ready for pickup.`
+      ),
     [byLane.ready]
   );
 
-  const loyaltyRows = useMemo(() => customers.map((customer) => {
-    const orderCount = orders.filter((order) => order.customer?.id === customer.id).length;
-    return { ...customer, orderCount, points: orderCount * 2 };
-  }), [customers, orders]);
+  const loyaltyRows = useMemo(
+    () =>
+      customers.map((customer) => {
+        const orderCount = orders.filter((order) => order.customer?.id === customer.id).length;
+        return { ...customer, orderCount, points: orderCount * 2 };
+      }),
+    [customers, orders]
+  );
 
   const addCustomer = async (e: FormEvent) => {
     e.preventDefault();
@@ -121,14 +154,39 @@ export default function DashboardPage() {
     await loadDashboard();
   };
 
+  const resolveServiceIds = () => {
+    const findByName = (needle: string) =>
+      services.find((service) => service.name.toLowerCase() === needle.toLowerCase())?.id ??
+      services.find((service) => service.name.toLowerCase().includes(needle.toLowerCase()))?.id;
+
+    return selectedServiceKeys
+      .map((key) => findByName(key))
+      .filter((id): id is string => Boolean(id));
+  };
+
   const createOrder = async (e: FormEvent) => {
     e.preventDefault();
-    if (!customerId || !serviceId || weight <= 0) return;
+    if (!customerId || weight <= 0) return;
+    if (!isValidServiceCombo) {
+      setError('Invalid service combo. Allowed: Wash, Dry, Wash+Dry, or Wash+Dry+Fold.');
+      return;
+    }
+
+    const serviceIds = resolveServiceIds();
+    if (!serviceIds.length) {
+      setError('Service setup missing. Please seed services (Wash, Dry, Fold) first.');
+      return;
+    }
+
     setError('');
     try {
-      const orderRes = await api.post('/orders', { customerId, items: [{ serviceId, weight }] });
+      const items = serviceIds.map((serviceId) => ({ serviceId, weight }));
+      const orderRes = await api.post('/orders', { customerId, items });
       const orderId = orderRes.data.data.id as string;
-      await api.post(`/orders/${orderId}/payments`, { amount: Number(estimatedPrice), method: paymentMethod });
+      await api.post(`/orders/${orderId}/payments`, {
+        amount: Number(estimatedPrice),
+        method: paymentMethod
+      });
       await loadDashboard();
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message;
@@ -178,25 +236,42 @@ export default function DashboardPage() {
             <h2 className="text-3xl font-bold leading-none">Laundry POS</h2>
             <p className="text-slate-500 mt-2">New order, instant pricing, and payment capture.</p>
           </div>
+
           <form onSubmit={addCustomer} className="bg-slate-100 rounded-xl p-3 grid grid-cols-2 gap-2">
             <input value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} placeholder="Customer name" className="bg-white" />
             <input value={newCustomerPhone} onChange={(e) => setNewCustomerPhone(e.target.value)} placeholder="Cellphone number" className="bg-white" />
             <button className="col-span-2 bg-slate-200">Add New Customer</button>
           </form>
+
           <form onSubmit={createOrder} className="space-y-2">
             <label className="block text-sm">Customer</label>
             <select className="w-full" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` (${c.phone})` : ''}</option>)}
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.phone ? ` (${c.phone})` : ''}
+                </option>
+              ))}
             </select>
+
             <label className="block text-sm">Services</label>
             <div className="grid grid-cols-3 gap-2">
-              {services.slice(0, 3).map((service) => (
-                <button key={service.id} type="button" onClick={() => setServiceId(service.id)} className={`py-2 ${serviceId === service.id ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}>
-                  <div>{service.name}</div>
-                  <div>₱{Number(service.pricePerKg)}/kg</div>
+              {serviceButtons.map((service) => (
+                <button
+                  key={service.key}
+                  type="button"
+                  onClick={() => setSelectedServices((prev) => ({ ...prev, [service.key]: !prev[service.key] }))}
+                  className={`py-2 ${selectedServices[service.key] ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}
+                >
+                  <div>{service.label}</div>
+                  <div>₱{service.rate}/kg</div>
                 </button>
               ))}
             </div>
+            {!isValidServiceCombo && (
+              <p className="text-xs text-red-600">Fold cannot be selected alone. Allowed: Wash, Dry, Wash+Dry, Wash+Dry+Fold.</p>
+            )}
+
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-sm">Weight (kg)</label>
@@ -205,12 +280,20 @@ export default function DashboardPage() {
               <div>
                 <label className="block text-sm">Payment</label>
                 <select className="w-full" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}>
-                  <option value="cash">Cash</option><option value="card">Card</option><option value="online">Online</option>
+                  <option value="cash">Cash</option>
+                  <option value="card">Card</option>
+                  <option value="online">Online</option>
                 </select>
               </div>
             </div>
-            <div className="bg-slate-100 rounded-xl p-3"><p className="text-slate-500">Auto-calculated price</p><p className="text-3xl font-bold">₱{estimatedPrice}</p></div>
-            <button className="w-full bg-indigo-600 text-white py-2">Create Order + Record Payment</button>
+
+            <div className="bg-slate-100 rounded-xl p-3">
+              <p className="text-slate-500">Auto-calculated price</p>
+              <p className="text-3xl font-bold">₱{estimatedPrice}</p>
+            </div>
+            <button className="w-full bg-indigo-600 text-white py-2" disabled={!isValidServiceCombo}>
+              Create Order + Record Payment
+            </button>
           </form>
         </section>
 
@@ -230,26 +313,23 @@ export default function DashboardPage() {
                 <div key={lane.key} className="bg-slate-100 rounded-lg p-2 min-h-[240px]">
                   <h4 className="font-medium mb-2">{lane.label}</h4>
                   <div className="space-y-2">
-                    {byLane[lane.key].map((order) => {
-                      const paid = order.payments.reduce((acc, p) => acc + Number(p.amount), 0);
-                      return (
-                        <article key={order.id} className="bg-white border rounded p-2 text-sm leading-tight">
-                          <p className="font-medium">L-{order.id.slice(0, 4).toUpperCase()}</p>
-                          <p>{order.customer?.name ?? 'Walk-in'}</p>
-                          <p>{order.items[0]?.service?.name ?? 'Laundry Service'}</p>
-                          <p>₱{Number(order.totalPrice).toFixed(2)}</p>
-                          {nextStatus(order.status) && (
-                            <button
-                              className="mt-1 w-full bg-slate-800 text-white py-1 rounded"
-                              disabled={busyOrderId === order.id}
-                              onClick={() => advanceOrder(order)}
-                            >
-                              {actionLabel(order.status)}
-                            </button>
-                          )}
-                        </article>
-                      );
-                    })}
+                    {byLane[lane.key].map((order) => (
+                      <article key={order.id} className="bg-white border rounded p-2 text-sm leading-tight">
+                        <p className="font-medium">L-{order.id.slice(0, 4).toUpperCase()}</p>
+                        <p>{order.customer?.name ?? 'Walk-in'}</p>
+                        <p>{order.items.map((item) => item.service?.name).filter(Boolean).join(' + ') || 'Laundry Service'}</p>
+                        <p>₱{Number(order.totalPrice).toFixed(2)}</p>
+                        {nextStatus(order.status) && (
+                          <button
+                            className="mt-1 w-full bg-slate-800 text-white py-1 rounded"
+                            disabled={busyOrderId === order.id}
+                            onClick={() => advanceOrder(order)}
+                          >
+                            {actionLabel(order.status)}
+                          </button>
+                        )}
+                      </article>
+                    ))}
                     {!byLane[lane.key].length && <p className="text-xs text-slate-500">No orders</p>}
                   </div>
                 </div>
@@ -268,8 +348,24 @@ export default function DashboardPage() {
             <h3 className="text-2xl font-bold">Customers & Loyalty</h3>
             <div className="overflow-x-auto mt-2">
               <table className="min-w-full text-sm">
-                <thead><tr className="text-left border-b"><th className="py-1">Name</th><th className="py-1">Phone</th><th className="py-1">Orders</th><th className="py-1">Loyalty Points</th></tr></thead>
-                <tbody>{loyaltyRows.map((row) => <tr key={row.id} className="border-b"><td className="py-1">{row.name}</td><td className="py-1">{row.phone ?? '-'}</td><td className="py-1">{row.orderCount}</td><td className="py-1">{row.points}</td></tr>)}</tbody>
+                <thead>
+                  <tr className="text-left border-b">
+                    <th className="py-1">Name</th>
+                    <th className="py-1">Phone</th>
+                    <th className="py-1">Orders</th>
+                    <th className="py-1">Loyalty Points</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loyaltyRows.map((row) => (
+                    <tr key={row.id} className="border-b">
+                      <td className="py-1">{row.name}</td>
+                      <td className="py-1">{row.phone ?? '-'}</td>
+                      <td className="py-1">{row.orderCount}</td>
+                      <td className="py-1">{row.points}</td>
+                    </tr>
+                  ))}
+                </tbody>
               </table>
             </div>
           </div>
@@ -280,5 +376,10 @@ export default function DashboardPage() {
 }
 
 function MetricCard({ title, value }: { title: string; value: string }) {
-  return <div className="bg-white rounded-xl p-3 shadow-sm"><p className="text-slate-500 text-sm">{title}</p><p className="text-4xl font-bold mt-1 leading-none">{value}</p></div>;
+  return (
+    <div className="bg-white rounded-xl p-3 shadow-sm">
+      <p className="text-slate-500 text-sm">{title}</p>
+      <p className="text-4xl font-bold mt-1 leading-none">{value}</p>
+    </div>
+  );
 }

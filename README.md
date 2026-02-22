@@ -59,3 +59,6 @@ npm run prisma:seed
 4. Retry with:
    - `admin@laundrypos.local` / `admin123`
    - `staff@laundrypos.local` / `staff123`
+
+## Workflow Service Presets
+- Services seeded for workflow selector: Wash (₱3/kg), Dry (₱2/kg), Fold (₱1.5/kg).

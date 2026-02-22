@@ -31,6 +31,15 @@ export const createOrder = async (req: Request, res: Response) => {
   const services = await prisma.service.findMany({ where: { id: { in: serviceIds } } });
   const serviceMap = new Map(services.map((s) => [s.id, Number(s.pricePerKg)]));
 
+
+  const serviceNameMap = new Map(services.map((s) => [s.id, s.name.toLowerCase()]));
+  const hasWashOrDry = items.some((i) => {
+    const name = serviceNameMap.get(i.serviceId) ?? '';
+    return name.includes('wash') || name.includes('dry');
+  });
+  const hasFold = items.some((i) => (serviceNameMap.get(i.serviceId) ?? '').includes('fold'));
+  if (hasFold && !hasWashOrDry) return fail(res, 400, 'Fold-only orders are not allowed');
+
   const orderItems = items.map((i) => {
     if (i.weight <= 0) throw new Error('Weight must be > 0');
     const price = serviceMap.get(i.serviceId) ?? 0;
