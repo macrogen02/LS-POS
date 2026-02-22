@@ -1,31 +1,66 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../services/api';
 
 type OrderStatus = 'pending' | 'washing' | 'ready' | 'completed' | 'collected';
+type PaymentMethod = 'cash' | 'card' | 'online';
+
+type Customer = {
+  id: string;
+  name: string;
+  phone?: string;
+};
+
+type Service = {
+  id: string;
+  name: string;
+  pricePerKg: number | string;
+};
 
 type Order = {
   id: string;
   status: OrderStatus;
   totalPrice: number | string;
-  createdAt: string;
-  customer?: { name: string };
+  customer?: { id: string; name: string };
   payments: Array<{ amount: number | string }>;
+  items: Array<{ service?: { id: string; name: string } }>;
 };
 
 const workflowOrder: OrderStatus[] = ['pending', 'washing', 'ready', 'completed', 'collected'];
 
 export default function DashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
   const [dailySales, setDailySales] = useState(0);
   const [monthlyRevenue, setMonthlyRevenue] = useState(0);
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [error, setError] = useState('');
 
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [customerId, setCustomerId] = useState('');
+  const [serviceId, setServiceId] = useState('');
+  const [weight, setWeight] = useState(3);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+
   const loadDashboard = useCallback(async () => {
     setError('');
     try {
-      const ordersRes = await api.get('/orders?page=1&pageSize=100');
+      const [ordersRes, customersRes, servicesRes] = await Promise.all([
+        api.get('/orders?page=1&pageSize=100'),
+        api.get('/customers'),
+        api.get('/services')
+      ]);
+
+      const fetchedCustomers: Customer[] = customersRes.data.data;
+      const fetchedServices: Service[] = servicesRes.data.data;
+
       setOrders(ordersRes.data.data.items);
+      setCustomers(fetchedCustomers);
+      setServices(fetchedServices);
+
+      if (!customerId && fetchedCustomers[0]) setCustomerId(fetchedCustomers[0].id);
+      if (!serviceId && fetchedServices[0]) setServiceId(fetchedServices[0].id);
     } catch {
       setError('Unable to load workflow data. Check backend connection.');
       return;
@@ -38,7 +73,7 @@ export default function DashboardPage() {
 
     setDailySales(dailyRes.status === 'fulfilled' ? Number(dailyRes.value.data.data.total ?? 0) : 0);
     setMonthlyRevenue(monthlyRes.status === 'fulfilled' ? Number(monthlyRes.value.data.data.total ?? 0) : 0);
-  }, []);
+  }, [customerId, serviceId]);
 
   useEffect(() => {
     loadDashboard();
@@ -53,12 +88,56 @@ export default function DashboardPage() {
       collected: []
     };
 
-    orders.forEach((order) => {
-      group[order.status]?.push(order);
-    });
-
+    orders.forEach((order) => group[order.status]?.push(order));
     return group;
   }, [orders]);
+
+  const topService = useMemo(() => {
+    const counter = new Map<string, number>();
+    orders.forEach((order) => {
+      order.items.forEach((item) => {
+        const name = item.service?.name;
+        if (name) counter.set(name, (counter.get(name) ?? 0) + 1);
+      });
+    });
+    return [...counter.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'N/A';
+  }, [orders]);
+
+  const estimatedPrice = useMemo(() => {
+    const service = services.find((s) => s.id === serviceId);
+    return (Number(service?.pricePerKg ?? 0) * weight).toFixed(2);
+  }, [serviceId, services, weight]);
+
+  const loyaltyRows = useMemo(() => {
+    return customers.map((customer) => {
+      const orderCount = orders.filter((order) => order.customer?.id === customer.id).length;
+      return { ...customer, orderCount, points: orderCount * 2 };
+    });
+  }, [customers, orders]);
+
+  const addCustomer = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!newCustomerName.trim()) return;
+    await api.post('/customers', { name: newCustomerName, phone: newCustomerPhone || undefined });
+    setNewCustomerName('');
+    setNewCustomerPhone('');
+    await loadDashboard();
+  };
+
+  const createOrder = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!customerId || !serviceId || weight <= 0) return;
+    setError('');
+    try {
+      const orderRes = await api.post('/orders', { customerId, items: [{ serviceId, weight }] });
+      const orderId = orderRes.data.data.id as string;
+      await api.post(`/orders/${orderId}/payments`, { amount: Number(estimatedPrice), method: paymentMethod });
+      await loadDashboard();
+    } catch (err: unknown) {
+      const message = (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message;
+      setError(message ?? 'Failed to create order.');
+    }
+  };
 
   const updateStatus = async (orderId: string, nextStatus: OrderStatus) => {
     setBusyOrderId(orderId);
@@ -75,52 +154,156 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">Workflow Dashboard</h2>
-        <button className="bg-slate-800 text-white px-3 py-1" onClick={loadDashboard}>Refresh</button>
-      </div>
+    <div className="space-y-3">
+      {error && <p className="text-red-600 text-sm">{error}</p>}
 
-      {error && <p className="text-red-600">{error}</p>}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
+        <section className="xl:col-span-4 bg-white rounded-xl p-4 shadow-sm space-y-3">
+          <div>
+            <h2 className="text-3xl font-bold leading-none">Laundry POS</h2>
+            <p className="text-slate-500 mt-2">New order, instant pricing, and payment capture.</p>
+          </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white rounded p-4 shadow">Orders Today: <strong>{orders.length}</strong></div>
-        <div className="bg-white rounded p-4 shadow">Daily Sales: <strong>${dailySales.toFixed(2)}</strong></div>
-        <div className="bg-white rounded p-4 shadow">Monthly Revenue: <strong>${monthlyRevenue.toFixed(2)}</strong></div>
-      </div>
+          <form onSubmit={addCustomer} className="bg-slate-100 rounded-xl p-3 grid grid-cols-2 gap-2">
+            <input value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} placeholder="Customer name" className="bg-white" />
+            <input value={newCustomerPhone} onChange={(e) => setNewCustomerPhone(e.target.value)} placeholder="Cellphone number" className="bg-white" />
+            <button className="col-span-2 bg-slate-200">Add New Customer</button>
+          </form>
 
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
-        {workflowOrder.map((status) => (
-          <section key={status} className="bg-white rounded shadow p-3 min-h-64">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="font-semibold capitalize">{status}</h3>
-              <span className="text-xs bg-slate-200 rounded-full px-2 py-0.5">{byStatus[status].length}</span>
+          <form onSubmit={createOrder} className="space-y-2">
+            <label className="block text-sm">Customer</label>
+            <select className="w-full" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
+              {customers.map((c) => <option key={c.id} value={c.id}>{c.name}{c.phone ? ` (${c.phone})` : ''}</option>)}
+            </select>
+
+            <label className="block text-sm">Services</label>
+            <div className="grid grid-cols-3 gap-2">
+              {services.slice(0, 3).map((service) => (
+                <button
+                  key={service.id}
+                  type="button"
+                  onClick={() => setServiceId(service.id)}
+                  className={`py-2 ${serviceId === service.id ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}
+                >
+                  <div>{service.name}</div>
+                  <div>₱{Number(service.pricePerKg)}/kg</div>
+                </button>
+              ))}
             </div>
-            <div className="space-y-2">
-              {byStatus[status].map((order) => {
-                const paid = order.payments.reduce((acc, p) => acc + Number(p.amount), 0);
-                const total = Number(order.totalPrice);
-                return (
-                  <article key={order.id} className="border rounded p-2 text-sm space-y-1">
-                    <div className="font-medium">{order.customer?.name ?? 'Walk-in'}</div>
-                    <div>Total: ${total.toFixed(2)}</div>
-                    <div>Paid: ${paid.toFixed(2)}</div>
-                    <select
-                      className="w-full"
-                      value={order.status}
-                      onChange={(e) => updateStatus(order.id, e.target.value as OrderStatus)}
-                      disabled={busyOrderId === order.id}
-                    >
-                      {workflowOrder.map((next) => <option key={next} value={next}>{next}</option>)}
-                    </select>
-                  </article>
-                );
-              })}
-              {!byStatus[status].length && <p className="text-xs text-slate-500">No orders</p>}
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-sm">Weight (kg)</label>
+                <input className="w-full" type="number" min={0.5} step={0.5} value={weight} onChange={(e) => setWeight(Number(e.target.value))} />
+              </div>
+              <div>
+                <label className="block text-sm">Payment</label>
+                <select className="w-full" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}>
+                  <option value="cash">Cash</option>
+                  <option value="card">Card</option>
+                  <option value="online">Online</option>
+                </select>
+              </div>
             </div>
-          </section>
-        ))}
+
+            <div className="bg-slate-100 rounded-xl p-3">
+              <p className="text-slate-500">Auto-calculated price</p>
+              <p className="text-3xl font-bold">₱{estimatedPrice}</p>
+            </div>
+
+            <button className="w-full bg-indigo-600 text-white py-2">Create Order + Record Payment</button>
+          </form>
+        </section>
+
+        <section className="xl:col-span-8 space-y-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <MetricCard title="Daily Sales" value={`₱${dailySales.toFixed(2)}`} />
+            <MetricCard title="Monthly Sales (est.)" value={`₱${monthlyRevenue.toFixed(2)}`} />
+            <MetricCard title="Top Service" value={topService} />
+            <MetricCard title="Ready for Pickup" value={`${byStatus.ready.length}`} />
+            <MetricCard title="Picked up" value={`${byStatus.collected.length}`} />
+          </div>
+
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-3xl font-bold leading-none">Laundry Workflow</h3>
+              <button className="bg-slate-800 text-white px-2 py-1 text-sm" onClick={loadDashboard}>Refresh</button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
+              {workflowOrder.map((status) => (
+                <div key={status} className="bg-slate-100 rounded-lg p-2 min-h-[240px]">
+                  <div className="flex justify-between mb-2">
+                    <h4 className="font-medium capitalize">{status}</h4>
+                    <span className="text-xs">{byStatus[status].length}</span>
+                  </div>
+                  <div className="space-y-2">
+                    {byStatus[status].map((order) => {
+                      const paid = order.payments.reduce((acc, p) => acc + Number(p.amount), 0);
+                      return (
+                        <article key={order.id} className="bg-white border rounded p-2 text-sm leading-tight">
+                          <p className="font-medium">{order.id.slice(0, 6).toUpperCase()}</p>
+                          <p>{order.customer?.name ?? 'Walk-in'}</p>
+                          <p>₱{Number(order.totalPrice).toFixed(2)}</p>
+                          <p className="text-slate-500">Paid: ₱{paid.toFixed(2)}</p>
+                          <select
+                            className="w-full mt-1"
+                            value={order.status}
+                            onChange={(e) => updateStatus(order.id, e.target.value as OrderStatus)}
+                            disabled={busyOrderId === order.id}
+                          >
+                            {workflowOrder.map((next) => <option key={next} value={next}>{next}</option>)}
+                          </select>
+                        </article>
+                      );
+                    })}
+                    {!byStatus[status].length && <p className="text-xs text-slate-500">No orders</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <h3 className="text-2xl font-bold leading-none">SMS Notifications (Auto on Ready)</h3>
+            <p className="text-slate-500 mt-2">No SMS sent yet.</p>
+          </div>
+
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <h3 className="text-2xl font-bold leading-none">Customers & Loyalty</h3>
+            <div className="overflow-x-auto mt-2">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="text-left border-b">
+                    <th className="py-1">Name</th>
+                    <th className="py-1">Phone</th>
+                    <th className="py-1">Orders</th>
+                    <th className="py-1">Loyalty Points</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loyaltyRows.map((row) => (
+                    <tr key={row.id} className="border-b">
+                      <td className="py-1">{row.name}</td>
+                      <td className="py-1">{row.phone ?? '-'}</td>
+                      <td className="py-1">{row.orderCount}</td>
+                      <td className="py-1">{row.points}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
       </div>
+    </div>
+  );
+}
+
+function MetricCard({ title, value }: { title: string; value: string }) {
+  return (
+    <div className="bg-white rounded-xl p-3 shadow-sm">
+      <p className="text-slate-500 text-sm">{title}</p>
+      <p className="text-4xl font-bold mt-1 leading-none">{value}</p>
     </div>
   );
 }
