@@ -69,9 +69,25 @@ export default function DashboardPage() {
       ]);
 
       const fetchedCustomers: Customer[] = customersRes.data.data;
+      let fetchedServices: Service[] = servicesRes.data.data;
+
+      const canonicalServices: Array<{ name: string; pricePerKg: number }> = [
+        { name: 'Wash', pricePerKg: 3 },
+        { name: 'Dry', pricePerKg: 2 },
+        { name: 'Fold', pricePerKg: 1.5 }
+      ];
+      const hasExact = (name: string) => fetchedServices.some((service) => service.name.trim().toLowerCase() === name.toLowerCase());
+
+      const missingCanonical = canonicalServices.filter((service) => !hasExact(service.name));
+      if (missingCanonical.length) {
+        await Promise.allSettled(missingCanonical.map((service) => api.post('/services', service)));
+        const refreshedServicesRes = await api.get('/services');
+        fetchedServices = refreshedServicesRes.data.data;
+      }
+
       setOrders(ordersRes.data.data.items);
       setCustomers(fetchedCustomers);
-      setServices(servicesRes.data.data);
+      setServices(fetchedServices);
 
       if (!customerId && fetchedCustomers[0]) setCustomerId(fetchedCustomers[0].id);
     } catch {
@@ -127,17 +143,10 @@ export default function DashboardPage() {
   }, [selectedServices]);
 
   const resolvedSelectedServices = useMemo(() => {
-    const lower = services.map((service) => ({ ...service, lowerName: service.name.trim().toLowerCase() }));
-
-    const findService = (key: ServiceKey) =>
-      lower.find((service) => service.lowerName === key) ??
-      lower.find((service) => service.lowerName.includes(key));
-
+    const idByName = new Map(services.map((service) => [service.name.trim().toLowerCase(), service]));
     return selectedServiceKeys
-      .map((key) => findService(key))
-      .filter((service, index, arr): service is (Service & { lowerName: string }) =>
-        Boolean(service) && arr.findIndex((item) => item?.id === service?.id) === index
-      );
+      .map((key) => idByName.get(key))
+      .filter((service): service is Service => Boolean(service));
   }, [selectedServiceKeys, services]);
 
   const estimatedPrice = useMemo(() => {
@@ -221,6 +230,24 @@ export default function DashboardPage() {
     return '';
   };
 
+
+  const summarizeOrderServices = (order: Order) => {
+    const names = order.items.map((item) => item.service?.name?.trim().toLowerCase()).filter((name): name is string => Boolean(name));
+
+    const exact = new Set(names.filter((name) => name === 'wash' || name === 'dry' || name === 'fold'));
+    if (exact.size) {
+      const ordered = ['wash', 'dry', 'fold'].filter((key) => exact.has(key));
+      return ordered.map((key) => key[0].toUpperCase() + key.slice(1)).join(' + ');
+    }
+
+    const hasWash = names.some((name) => name.includes('wash'));
+    const hasDry = names.some((name) => name.includes('dry'));
+    const labels: string[] = [];
+    if (hasWash) labels.push('Wash');
+    if (hasDry) labels.push('Dry');
+    return labels.join(' + ') || 'Laundry Service';
+  };
+
   const advanceOrder = async (order: Order) => {
     const target = nextStatus(order.status);
     if (!target) return;
@@ -275,7 +302,7 @@ export default function DashboardPage() {
                   className={`py-2 ${selectedServices[service.key] ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}
                 >
                   <div>{service.label}</div>
-                  <div>₱{resolvedSelectedServices.find((s) => s.lowerName === service.key)?.pricePerKg ?? service.rate}/kg</div>
+                  <div>₱{Number(resolvedSelectedServices.find((s) => s.name.trim().toLowerCase() === service.key)?.pricePerKg ?? service.rate)}/kg</div>
                 </button>
               ))}
             </div>
@@ -328,7 +355,7 @@ export default function DashboardPage() {
                       <article key={order.id} className="bg-white border rounded p-2 text-sm leading-tight">
                         <p className="font-medium">L-{order.id.slice(0, 4).toUpperCase()}</p>
                         <p>{order.customer?.name ?? 'Walk-in'}</p>
-                        <p>{order.items.map((item) => item.service?.name).filter(Boolean).join(' + ') || 'Laundry Service'}</p>
+                        <p>{summarizeOrderServices(order)}</p>
                         <p>₱{Number(order.totalPrice).toFixed(2)}</p>
                         {nextStatus(order.status) && (
                           <button
