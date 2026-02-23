@@ -32,6 +32,8 @@ const serviceButtons: Array<{ key: ServiceKey; label: string; rate: number }> = 
   { key: 'fold', label: 'Fold', rate: 1.5 }
 ];
 
+const FOLDING_STAGE_KEY = 'dashboard-folding-stage-order-ids';
+
 export default function DashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -40,6 +42,16 @@ export default function DashboardPage() {
   const [monthlyRevenue, setMonthlyRevenue] = useState(0);
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [foldingStageOrderIds, setFoldingStageOrderIds] = useState<string[]>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const stored = window.localStorage.getItem(FOLDING_STAGE_KEY);
+      const parsed = stored ? JSON.parse(stored) : [];
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+    } catch {
+      return [];
+    }
+  });
 
   const [customerId, setCustomerId] = useState('');
   const [selectedServices, setSelectedServices] = useState<Record<ServiceKey, boolean>>({
@@ -98,6 +110,23 @@ export default function DashboardPage() {
     loadDashboard();
   }, [loadDashboard]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(FOLDING_STAGE_KEY, JSON.stringify(foldingStageOrderIds));
+  }, [foldingStageOrderIds]);
+
+  useEffect(() => {
+    setFoldingStageOrderIds((prev) => {
+      const activeIds = new Set(
+        orders
+          .filter((order) => order.status === 'completed' && hasFoldService(order))
+          .map((order) => order.id)
+      );
+      const next = prev.filter((id) => activeIds.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [orders]);
+
   const hasWashService = (order: Order) => {
     return order.items.some((item) => {
       const name = item.service?.name?.trim().toLowerCase() ?? '';
@@ -120,11 +149,12 @@ export default function DashboardPage() {
   };
 
   const isWashOnlyOrder = (order: Order) => hasWashService(order) && !hasDryService(order) && !hasFoldService(order);
+  const isInFoldingStage = (order: Order) => order.status === 'completed' && hasFoldService(order) && foldingStageOrderIds.includes(order.id);
 
   const laneForOrder = (order: Order): WorkflowLane => {
     if (order.status === 'pending') return 'pending';
     if (order.status === 'washing') return 'washing';
-    if (order.status === 'completed') return hasFoldService(order) ? 'folding' : 'drying';
+    if (order.status === 'completed') return isInFoldingStage(order) ? 'folding' : 'drying';
     if (order.status === 'ready') return 'ready';
     return 'picked_up';
   };
@@ -133,7 +163,7 @@ export default function DashboardPage() {
     const group: Record<WorkflowLane, Order[]> = { pending: [], washing: [], drying: [], folding: [], ready: [], picked_up: [] };
     orders.forEach((order) => group[laneForOrder(order)].push(order));
     return group;
-  }, [orders]);
+  }, [orders, foldingStageOrderIds]);
 
   const topService = useMemo(() => {
     const counter = new Map<string, number>();
@@ -239,7 +269,7 @@ export default function DashboardPage() {
   const actionLabel = (order: Order) => {
     if (order.status === 'pending') return hasWashService(order) ? 'Start Washing' : 'Move to Drying';
     if (order.status === 'washing') return isWashOnlyOrder(order) ? 'Mark as Ready' : 'Move to Drying';
-    if (order.status === 'completed') return 'Mark as Ready';
+    if (order.status === 'completed') return isInFoldingStage(order) ? 'Mark as Ready' : hasFoldService(order) ? 'Move to Folding' : 'Mark as Ready';
     if (order.status === 'ready') return 'Hand-over to Customer';
     return '';
   };
@@ -263,12 +293,20 @@ export default function DashboardPage() {
   };
 
   const advanceOrder = async (order: Order) => {
+    if (order.status === 'completed' && hasFoldService(order) && !isInFoldingStage(order)) {
+      setFoldingStageOrderIds((prev) => (prev.includes(order.id) ? prev : [...prev, order.id]));
+      return;
+    }
+
     const target = nextStatus(order);
     if (!target) return;
     setBusyOrderId(order.id);
     setError('');
     try {
       await api.put(`/orders/${order.id}/status`, { status: target });
+      if (target === 'ready' || target === 'collected') {
+        setFoldingStageOrderIds((prev) => prev.filter((id) => id !== order.id));
+      }
       await loadDashboard();
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message;
