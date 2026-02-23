@@ -48,8 +48,6 @@ export default function DashboardPage() {
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [error, setError] = useState('');
 
-  const [newCustomerName, setNewCustomerName] = useState('');
-  const [newCustomerPhone, setNewCustomerPhone] = useState('');
   const [customerId, setCustomerId] = useState('');
   const [selectedServices, setSelectedServices] = useState<Record<ServiceKey, boolean>>({
     wash: true,
@@ -173,15 +171,6 @@ export default function DashboardPage() {
     [customers, orders]
   );
 
-  const addCustomer = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!newCustomerName.trim()) return;
-    await api.post('/customers', { name: newCustomerName, phone: newCustomerPhone || undefined });
-    setNewCustomerName('');
-    setNewCustomerPhone('');
-    await loadDashboard();
-  };
-
   const resolveServiceIds = () => resolvedSelectedServices.map((service) => service.id);
 
   const createOrder = async (e: FormEvent) => {
@@ -282,12 +271,6 @@ export default function DashboardPage() {
             <h2 className="text-3xl font-bold leading-none">Laundry POS</h2>
             <p className="text-slate-500 mt-2">New order, instant pricing, and payment capture.</p>
           </div>
-
-          <form onSubmit={addCustomer} className="bg-slate-100 rounded-xl p-3 grid grid-cols-2 gap-2">
-            <input value={newCustomerName} onChange={(e) => setNewCustomerName(e.target.value)} placeholder="Customer name" className="bg-white" />
-            <input value={newCustomerPhone} onChange={(e) => setNewCustomerPhone(e.target.value)} placeholder="Cellphone number" className="bg-white" />
-            <button className="col-span-2 bg-slate-200">Add New Customer</button>
-          </form>
 
           <form onSubmit={createOrder} className="space-y-2">
             <label className="block text-sm">Customer</label>
