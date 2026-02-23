@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import api from '../services/api';
 
 type OrderStatus = 'pending' | 'washing' | 'ready' | 'completed' | 'collected';
-type WorkflowLane = 'pending' | 'washing' | 'drying' | 'ready' | 'picked_up';
+type WorkflowLane = 'pending' | 'washing' | 'drying' | 'folding' | 'ready' | 'picked_up';
 type PaymentMethod = 'cash' | 'card' | 'online';
 type ServiceKey = 'wash' | 'dry' | 'fold';
 
@@ -21,17 +21,10 @@ const lanes: Array<{ key: WorkflowLane; label: string }> = [
   { key: 'pending', label: 'Pending' },
   { key: 'washing', label: 'Washing' },
   { key: 'drying', label: 'Drying' },
+  { key: 'folding', label: 'Folding' },
   { key: 'ready', label: 'Ready' },
   { key: 'picked_up', label: 'Picked up' }
 ];
-
-const laneByStatus: Record<OrderStatus, WorkflowLane> = {
-  pending: 'pending',
-  washing: 'washing',
-  completed: 'drying',
-  ready: 'ready',
-  collected: 'picked_up'
-};
 
 const serviceButtons: Array<{ key: ServiceKey; label: string; rate: number }> = [
   { key: 'wash', label: 'Wash', rate: 3 },
@@ -105,9 +98,31 @@ export default function DashboardPage() {
     loadDashboard();
   }, [loadDashboard]);
 
+  const hasWashService = (order: Order) => {
+    return order.items.some((item) => {
+      const name = item.service?.name?.trim().toLowerCase() ?? '';
+      return name === 'wash' || name.includes('wash');
+    });
+  };
+
+  const hasFoldService = (order: Order) => {
+    return order.items.some((item) => {
+      const name = item.service?.name?.trim().toLowerCase() ?? '';
+      return name === 'fold' || name.includes('fold');
+    });
+  };
+
+  const laneForOrder = (order: Order): WorkflowLane => {
+    if (order.status === 'pending') return 'pending';
+    if (order.status === 'washing') return 'washing';
+    if (order.status === 'completed') return 'drying';
+    if (order.status === 'ready') return hasFoldService(order) ? 'folding' : 'ready';
+    return 'picked_up';
+  };
+
   const byLane = useMemo(() => {
-    const group: Record<WorkflowLane, Order[]> = { pending: [], washing: [], drying: [], ready: [], picked_up: [] };
-    orders.forEach((order) => group[laneByStatus[order.status]].push(order));
+    const group: Record<WorkflowLane, Order[]> = { pending: [], washing: [], drying: [], folding: [], ready: [], picked_up: [] };
+    orders.forEach((order) => group[laneForOrder(order)].push(order));
     return group;
   }, [orders]);
 
@@ -204,16 +219,9 @@ export default function DashboardPage() {
     }
   };
 
-  const hasWashService = (order: Order) => {
-    return order.items.some((item) => {
-      const name = item.service?.name?.trim().toLowerCase() ?? '';
-      return name === 'wash' || name.includes('wash');
-    });
-  };
-
   const nextStatus = (order: Order): OrderStatus | null => {
     if (order.status === 'pending') return hasWashService(order) ? 'washing' : 'completed';
-    if (order.status === 'washing') return 'completed';
+    if (order.status === 'washing') return hasWashService(order) && !hasFoldService(order) ? 'ready' : 'completed';
     if (order.status === 'completed') return 'ready';
     if (order.status === 'ready') return 'collected';
     return null;
@@ -221,8 +229,8 @@ export default function DashboardPage() {
 
   const actionLabel = (order: Order) => {
     if (order.status === 'pending') return hasWashService(order) ? 'Start Washing' : 'Move to Drying';
-    if (order.status === 'washing') return 'Move to Drying';
-    if (order.status === 'completed') return 'Mark as Ready';
+    if (order.status === 'washing') return hasWashService(order) && !hasFoldService(order) ? 'Mark as Ready' : 'Move to Drying';
+    if (order.status === 'completed') return hasFoldService(order) ? 'Move to Folding' : 'Mark as Ready';
     if (order.status === 'ready') return 'Hand-over to Customer';
     return '';
   };
@@ -337,7 +345,7 @@ export default function DashboardPage() {
 
           <div className="bg-white rounded-xl p-4 shadow-sm">
             <h3 className="text-2xl font-bold mb-3">Laundry Workflow</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-2">
               {lanes.map((lane) => (
                 <div key={lane.key} className="bg-slate-100 rounded-lg p-2 min-h-[240px]">
                   <h4 className="font-medium mb-2">{lane.label}</h4>
