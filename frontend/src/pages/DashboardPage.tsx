@@ -124,8 +124,8 @@ export default function DashboardPage() {
   const laneForOrder = (order: Order): WorkflowLane => {
     if (order.status === 'pending') return 'pending';
     if (order.status === 'washing') return 'washing';
-    if (order.status === 'completed') return 'drying';
-    if (order.status === 'ready') return hasFoldService(order) ? 'folding' : 'ready';
+    if (order.status === 'completed') return hasFoldService(order) ? 'folding' : 'drying';
+    if (order.status === 'ready') return 'ready';
     return 'picked_up';
   };
 
@@ -239,7 +239,7 @@ export default function DashboardPage() {
   const actionLabel = (order: Order) => {
     if (order.status === 'pending') return hasWashService(order) ? 'Start Washing' : 'Move to Drying';
     if (order.status === 'washing') return isWashOnlyOrder(order) ? 'Mark as Ready' : 'Move to Drying';
-    if (order.status === 'completed') return hasFoldService(order) ? 'Move to Folding' : 'Mark as Ready';
+    if (order.status === 'completed') return 'Mark as Ready';
     if (order.status === 'ready') return 'Hand-over to Customer';
     return '';
   };
