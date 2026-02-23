@@ -33,6 +33,8 @@ const serviceButtons: Array<{ key: ServiceKey; label: string; rate: number }> = 
 ];
 
 const FOLDING_STAGE_KEY = 'dashboard-folding-stage-order-ids';
+const MIN_MACHINE_LOAD_KG = 1;
+const MAX_MACHINE_LOAD_KG = 15;
 
 export default function DashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -54,6 +56,8 @@ export default function DashboardPage() {
   });
 
   const [customerId, setCustomerId] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [paymentOrderId, setPaymentOrderId] = useState('');
   const [selectedServices, setSelectedServices] = useState<Record<ServiceKey, boolean>>({
     wash: true,
     dry: false,
@@ -227,9 +231,56 @@ export default function DashboardPage() {
 
   const resolveServiceIds = () => resolvedSelectedServices.map((service) => service.id);
 
+  const selectedCustomer = useMemo(() => customers.find((customer) => customer.id === customerId), [customerId, customers]);
+
+  const filteredCustomers = useMemo(() => {
+    const query = customerSearch.trim().toLowerCase();
+    if (!query) return customers;
+    return customers.filter((customer) => {
+      const haystack = `${customer.name} ${customer.phone ?? ''}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [customerSearch, customers]);
+
+  useEffect(() => {
+    if (!filteredCustomers.length) return;
+    if (!filteredCustomers.some((customer) => customer.id === customerId)) {
+      setCustomerId(filteredCustomers[0].id);
+    }
+  }, [filteredCustomers, customerId]);
+
+  const outstandingBalance = (order: Order) => {
+    const paid = order.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+    return Math.max(0, Number(order.totalPrice) - paid);
+  };
+
+  const paymentStatus = (order: Order) => (outstandingBalance(order) <= 0 ? 'Paid' : 'Unpaid');
+
+  const unpaidOrders = useMemo(() => {
+    return orders
+      .filter((order) => outstandingBalance(order) > 0)
+      .filter((order) => !customerId || order.customer?.id === customerId)
+      .sort((a, b) => (a.id < b.id ? 1 : -1));
+  }, [orders, customerId]);
+
+  useEffect(() => {
+    if (!paymentOrderId && unpaidOrders[0]) {
+      setPaymentOrderId(unpaidOrders[0].id);
+      return;
+    }
+
+    if (paymentOrderId && !unpaidOrders.some((order) => order.id === paymentOrderId)) {
+      setPaymentOrderId(unpaidOrders[0]?.id ?? '');
+    }
+  }, [unpaidOrders, paymentOrderId]);
+
   const createOrder = async (e: FormEvent) => {
     e.preventDefault();
     if (!customerId || weight <= 0) return;
+    if (weight < MIN_MACHINE_LOAD_KG || weight > MAX_MACHINE_LOAD_KG) {
+      setError(`Weight must be between ${MIN_MACHINE_LOAD_KG}kg and ${MAX_MACHINE_LOAD_KG}kg per machine load.`);
+      return;
+    }
     if (!isValidServiceCombo) {
       setError('Invalid service combo. Allowed: Wash only, Dry only, Wash + Dry, Dry + Fold, or Wash + Dry + Fold.');
       return;
@@ -246,15 +297,39 @@ export default function DashboardPage() {
       const items = serviceIds.map((serviceId) => ({ serviceId, weight }));
       const orderRes = await api.post('/orders', { customerId, items });
       const orderId = orderRes.data.data.id as string;
-      const total = Number(orderRes.data.data.totalPrice);
-      await api.post(`/orders/${orderId}/payments`, {
-        amount: total,
-        method: paymentMethod
-      });
+      setPaymentOrderId(orderId);
       await loadDashboard();
     } catch (err: unknown) {
       const message = (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message;
       setError(message ?? 'Failed to create order.');
+    }
+  };
+
+  const recordPayment = async () => {
+    if (!paymentOrderId) {
+      setError('Select an order to record payment.');
+      return;
+    }
+
+    const order = orders.find((item) => item.id === paymentOrderId);
+    if (!order) {
+      setError('Order not found for payment recording.');
+      return;
+    }
+
+    const amount = outstandingBalance(order);
+    if (amount <= 0) {
+      setError('Selected order is already fully paid.');
+      return;
+    }
+
+    setError('');
+    try {
+      await api.post(`/orders/${order.id}/payments`, { amount, method: paymentMethod });
+      await loadDashboard();
+    } catch (err: unknown) {
+      const message = (err as { response?: { data?: { error?: { message?: string } } } })?.response?.data?.error?.message;
+      setError(message ?? 'Failed to record payment.');
     }
   };
 
@@ -328,15 +403,27 @@ export default function DashboardPage() {
           </div>
 
           <form onSubmit={createOrder} className="space-y-2">
+            <label className="block text-sm">Search Customer</label>
+            <input
+              className="w-full"
+              placeholder="Type customer name or phone"
+              value={customerSearch}
+              onChange={(e) => setCustomerSearch(e.target.value)}
+            />
+
             <label className="block text-sm">Customer</label>
             <select className="w-full" value={customerId} onChange={(e) => setCustomerId(e.target.value)}>
-              {customers.map((c) => (
+              {filteredCustomers.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                   {c.phone ? ` (${c.phone})` : ''}
                 </option>
               ))}
             </select>
+            <div className="bg-slate-50 rounded-lg p-2 text-sm text-slate-600">
+              <p><span className="font-medium">Name:</span> {selectedCustomer?.name ?? '-'}</p>
+              <p><span className="font-medium">Phone:</span> {selectedCustomer?.phone ?? '-'}</p>
+            </div>
 
             <label className="block text-sm">Services</label>
             <div className="grid grid-cols-3 gap-2">
@@ -356,10 +443,12 @@ export default function DashboardPage() {
               <p className="text-xs text-red-600">Allowed combinations: Wash only, Dry only, Wash + Dry, Dry + Fold, Wash + Dry + Fold.</p>
             )}
 
+            <p className="text-xs text-slate-500">Machine load: minimum {MIN_MACHINE_LOAD_KG}kg, maximum {MAX_MACHINE_LOAD_KG}kg.</p>
+
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-sm">Weight (kg)</label>
-                <input className="w-full" type="number" min={0.5} step={0.5} value={weight} onChange={(e) => setWeight(Number(e.target.value))} />
+                <input className="w-full" type="number" min={MIN_MACHINE_LOAD_KG} max={MAX_MACHINE_LOAD_KG} step={0.5} value={weight} onChange={(e) => setWeight(Number(e.target.value))} />
               </div>
               <div>
                 <label className="block text-sm">Payment</label>
@@ -376,8 +465,31 @@ export default function DashboardPage() {
               <p className="text-3xl font-bold">₱{estimatedPrice}</p>
             </div>
             <button className="w-full bg-indigo-600 text-white py-2" disabled={!isValidServiceCombo}>
-              Create Order + Record Payment
+              Create Order
             </button>
+
+            <div className="border rounded-xl p-3 space-y-2">
+              <p className="font-medium">Record Payment</p>
+              <select className="w-full" value={paymentOrderId} onChange={(e) => setPaymentOrderId(e.target.value)}>
+                {unpaidOrders.length ? (
+                  unpaidOrders.map((order) => (
+                    <option key={order.id} value={order.id}>
+                      L-{order.id.slice(0, 4).toUpperCase()} • {order.customer?.name ?? 'Walk-in'} • ₱{outstandingBalance(order).toFixed(2)} due
+                    </option>
+                  ))
+                ) : (
+                  <option value="">No unpaid orders</option>
+                )}
+              </select>
+              <button
+                type="button"
+                className="w-full bg-slate-800 text-white py-2 rounded disabled:opacity-60"
+                disabled={!unpaidOrders.length || !paymentOrderId}
+                onClick={recordPayment}
+              >
+                Record Payment
+              </button>
+            </div>
           </form>
         </section>
 
@@ -403,6 +515,9 @@ export default function DashboardPage() {
                         <p>{order.customer?.name ?? 'Walk-in'}</p>
                         <p>{summarizeOrderServices(order)}</p>
                         <p>₱{Number(order.totalPrice).toFixed(2)}</p>
+                        <p className={`text-xs font-medium ${paymentStatus(order) === 'Paid' ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          {paymentStatus(order)}
+                        </p>
                         {nextStatus(order) && (
                           <button
                             className="mt-1 w-full bg-slate-800 text-white py-1 rounded"
