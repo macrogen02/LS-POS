@@ -112,6 +112,15 @@ export default function DashboardPage() {
     });
   };
 
+  const hasDryService = (order: Order) => {
+    return order.items.some((item) => {
+      const name = item.service?.name?.trim().toLowerCase() ?? '';
+      return name === 'dry' || name.includes('dry');
+    });
+  };
+
+  const isWashOnlyOrder = (order: Order) => hasWashService(order) && !hasDryService(order) && !hasFoldService(order);
+
   const laneForOrder = (order: Order): WorkflowLane => {
     if (order.status === 'pending') return 'pending';
     if (order.status === 'washing') return 'washing';
@@ -221,7 +230,7 @@ export default function DashboardPage() {
 
   const nextStatus = (order: Order): OrderStatus | null => {
     if (order.status === 'pending') return hasWashService(order) ? 'washing' : 'completed';
-    if (order.status === 'washing') return hasWashService(order) && !hasFoldService(order) ? 'ready' : 'completed';
+    if (order.status === 'washing') return isWashOnlyOrder(order) ? 'ready' : 'completed';
     if (order.status === 'completed') return 'ready';
     if (order.status === 'ready') return 'collected';
     return null;
@@ -229,7 +238,7 @@ export default function DashboardPage() {
 
   const actionLabel = (order: Order) => {
     if (order.status === 'pending') return hasWashService(order) ? 'Start Washing' : 'Move to Drying';
-    if (order.status === 'washing') return hasWashService(order) && !hasFoldService(order) ? 'Mark as Ready' : 'Move to Drying';
+    if (order.status === 'washing') return isWashOnlyOrder(order) ? 'Mark as Ready' : 'Move to Drying';
     if (order.status === 'completed') return hasFoldService(order) ? 'Move to Folding' : 'Mark as Ready';
     if (order.status === 'ready') return 'Hand-over to Customer';
     return '';
@@ -239,9 +248,9 @@ export default function DashboardPage() {
   const summarizeOrderServices = (order: Order) => {
     const names = order.items.map((item) => item.service?.name?.trim().toLowerCase()).filter((name): name is string => Boolean(name));
 
-    const exact = new Set(names.filter((name) => name === 'wash' || name === 'dry' || name === 'fold'));
+    const exact = new Set(names.filter((name): name is 'wash' | 'dry' | 'fold' => name === 'wash' || name === 'dry' || name === 'fold'));
     if (exact.size) {
-      const ordered = ['wash', 'dry', 'fold'].filter((key) => exact.has(key));
+      const ordered = (['wash', 'dry', 'fold'] as const).filter((key) => exact.has(key));
       return ordered.map((key) => key[0].toUpperCase() + key.slice(1)).join(' + ');
     }
 
