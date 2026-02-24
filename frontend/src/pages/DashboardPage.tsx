@@ -8,6 +8,7 @@ type ServiceKey = 'wash' | 'dry' | 'fold';
 
 type Customer = { id: string; name: string; phone?: string };
 type Service = { id: string; name: string; pricePerKg: number | string };
+type LoadEntry = { id: number; selectedServices: Record<ServiceKey, boolean>; weight: number };
 type Order = {
   id: string;
   status: OrderStatus;
@@ -58,12 +59,9 @@ export default function DashboardPage() {
   const [customerId, setCustomerId] = useState('');
   const [customerSearch, setCustomerSearch] = useState('');
   const [paymentOrderId, setPaymentOrderId] = useState('');
-  const [selectedServices, setSelectedServices] = useState<Record<ServiceKey, boolean>>({
-    wash: true,
-    dry: false,
-    fold: false
-  });
-  const [weight, setWeight] = useState(3);
+  const [loadEntries, setLoadEntries] = useState<LoadEntry[]>([
+    { id: 1, selectedServices: { wash: true, dry: false, fold: false }, weight: 3 }
+  ]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
 
   const loadDashboard = useCallback(async () => {
@@ -180,12 +178,18 @@ export default function DashboardPage() {
     return [...counter.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'N/A';
   }, [orders]);
 
-  const selectedServiceKeys = useMemo(
-    () => (Object.keys(selectedServices) as ServiceKey[]).filter((key) => selectedServices[key]),
-    [selectedServices]
-  );
+  const serviceByKey = useMemo(() => {
+    const map = new Map<ServiceKey, Service>();
+    services.forEach((service) => {
+      const normalized = service.name.trim().toLowerCase();
+      if (normalized === 'wash' || normalized === 'dry' || normalized === 'fold') {
+        map.set(normalized, service);
+      }
+    });
+    return map;
+  }, [services]);
 
-  const isValidServiceCombo = useMemo(() => {
+  const isValidServiceComboFor = (selectedServices: Record<ServiceKey, boolean>) => {
     const hasWash = selectedServices.wash;
     const hasDry = selectedServices.dry;
     const hasFold = selectedServices.fold;
@@ -197,19 +201,39 @@ export default function DashboardPage() {
     const isDryFold = !hasWash && hasDry && hasFold;
 
     return isWashOnly || isDryOnly || isWashDry || isWashDryFold || isDryFold;
-  }, [selectedServices]);
+  };
 
-  const resolvedSelectedServices = useMemo(() => {
-    const idByName = new Map(services.map((service) => [service.name.trim().toLowerCase(), service]));
-    return selectedServiceKeys
-      .map((key) => idByName.get(key))
-      .filter((service): service is Service => Boolean(service));
-  }, [selectedServiceKeys, services]);
+  const isValidServiceCombo = useMemo(() => loadEntries.every((load) => isValidServiceComboFor(load.selectedServices)), [loadEntries]);
 
   const estimatedPrice = useMemo(() => {
-    const rate = resolvedSelectedServices.reduce((sum, service) => sum + Number(service.pricePerKg), 0);
-    return (rate * weight).toFixed(2);
-  }, [resolvedSelectedServices, weight]);
+    const total = loadEntries.reduce((sum, load) => {
+      const rate = (Object.keys(load.selectedServices) as ServiceKey[])
+        .filter((key) => load.selectedServices[key])
+        .reduce((inner, key) => inner + Number(serviceByKey.get(key)?.pricePerKg ?? serviceButtons.find((btn) => btn.key === key)?.rate ?? 0), 0);
+      return sum + rate * load.weight;
+    }, 0);
+    return total.toFixed(2);
+  }, [loadEntries, serviceByKey]);
+
+  const resolveItemsByLoad = () => {
+    const items: Array<{ serviceId: string; weight: number }> = [];
+    for (const load of loadEntries) {
+      const selectedKeys = (Object.keys(load.selectedServices) as ServiceKey[]).filter((key) => load.selectedServices[key]);
+      for (const key of selectedKeys) {
+        const service = serviceByKey.get(key);
+        if (!service) return null;
+        items.push({ serviceId: service.id, weight: load.weight });
+      }
+    }
+    return items;
+  };
+
+  const addLoad = () => {
+    setLoadEntries((prev) => [
+      ...prev,
+      { id: (prev[prev.length - 1]?.id ?? 0) + 1, selectedServices: { wash: true, dry: false, fold: false }, weight: 3 }
+    ]);
+  };
 
   const smsNotifications = useMemo(
     () =>
@@ -228,8 +252,6 @@ export default function DashboardPage() {
       }),
     [customers, orders]
   );
-
-  const resolveServiceIds = () => resolvedSelectedServices.map((service) => service.id);
 
   const selectedCustomer = useMemo(() => customers.find((customer) => customer.id === customerId), [customerId, customers]);
 
@@ -276,9 +298,9 @@ export default function DashboardPage() {
 
   const createOrder = async (e: FormEvent) => {
     e.preventDefault();
-    if (!customerId || weight <= 0) return;
-    if (weight < MIN_MACHINE_LOAD_KG || weight > MAX_MACHINE_LOAD_KG) {
-      setError(`Weight must be between ${MIN_MACHINE_LOAD_KG}kg and ${MAX_MACHINE_LOAD_KG}kg per machine load.`);
+    if (!customerId) return;
+    if (loadEntries.some((load) => load.weight <= 0 || load.weight < MIN_MACHINE_LOAD_KG || load.weight > MAX_MACHINE_LOAD_KG)) {
+      setError(`Each load weight must be between ${MIN_MACHINE_LOAD_KG}kg and ${MAX_MACHINE_LOAD_KG}kg.`);
       return;
     }
     if (!isValidServiceCombo) {
@@ -286,15 +308,14 @@ export default function DashboardPage() {
       return;
     }
 
-    const serviceIds = resolveServiceIds();
-    if (serviceIds.length !== selectedServiceKeys.length) {
+    const items = resolveItemsByLoad();
+    if (!items?.length) {
       setError('Service setup missing. Please seed exact services: Wash, Dry, Fold.');
       return;
     }
 
     setError('');
     try {
-      const items = serviceIds.map((serviceId) => ({ serviceId, weight }));
       const orderRes = await api.post('/orders', { customerId, items });
       const orderId = orderRes.data.data.id as string;
       setPaymentOrderId(orderId);
@@ -426,38 +447,69 @@ export default function DashboardPage() {
             </div>
 
             <label className="block text-sm">Services</label>
-            <div className="grid grid-cols-3 gap-2">
-              {serviceButtons.map((service) => (
-                <button
-                  key={service.key}
-                  type="button"
-                  onClick={() => setSelectedServices((prev) => ({ ...prev, [service.key]: !prev[service.key] }))}
-                  className={`py-2 ${selectedServices[service.key] ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}
-                >
-                  <div>{service.label}</div>
-                  <div>₱{Number(resolvedSelectedServices.find((s) => s.name.trim().toLowerCase() === service.key)?.pricePerKg ?? service.rate)}/kg</div>
-                </button>
+            <div className="space-y-3">
+              {loadEntries.map((load, index) => (
+                <div key={load.id} className="rounded-lg border p-2 space-y-2">
+                  <p className="text-sm font-medium">Load {index + 1}</p>
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
+                    {serviceButtons.map((service) => (
+                      <button
+                        key={`${load.id}-${service.key}`}
+                        type="button"
+                        onClick={() =>
+                          setLoadEntries((prev) =>
+                            prev.map((entry) =>
+                              entry.id === load.id
+                                ? {
+                                    ...entry,
+                                    selectedServices: { ...entry.selectedServices, [service.key]: !entry.selectedServices[service.key] }
+                                  }
+                                : entry
+                            )
+                          )
+                        }
+                        className={`py-2 ${load.selectedServices[service.key] ? 'bg-indigo-100 border-indigo-400 text-indigo-700' : 'bg-white'}`}
+                      >
+                        <div>{service.label}</div>
+                        <div>₱{Number(serviceByKey.get(service.key)?.pricePerKg ?? service.rate)}/kg</div>
+                      </button>
+                    ))}
+                    <div>
+                      <label className="block text-sm">Weight (kg)</label>
+                      <input
+                        className="w-full"
+                        type="number"
+                        min={MIN_MACHINE_LOAD_KG}
+                        max={MAX_MACHINE_LOAD_KG}
+                        step={0.5}
+                        value={load.weight}
+                        onChange={(e) =>
+                          setLoadEntries((prev) =>
+                            prev.map((entry) => (entry.id === load.id ? { ...entry, weight: Number(e.target.value) } : entry))
+                          )
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
               ))}
             </div>
+            <button type="button" className="text-sm rounded border px-3 py-1" onClick={addLoad}>
+              Add Load
+            </button>
             {!isValidServiceCombo && (
-              <p className="text-xs text-red-600">Allowed combinations: Wash only, Dry only, Wash + Dry, Dry + Fold, Wash + Dry + Fold.</p>
+              <p className="text-xs text-red-600">Allowed combinations per load: Wash only, Dry only, Wash + Dry, Dry + Fold, Wash + Dry + Fold.</p>
             )}
 
             <p className="text-xs text-slate-500">Machine load: minimum {MIN_MACHINE_LOAD_KG}kg, maximum {MAX_MACHINE_LOAD_KG}kg.</p>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-sm">Weight (kg)</label>
-                <input className="w-full" type="number" min={MIN_MACHINE_LOAD_KG} max={MAX_MACHINE_LOAD_KG} step={0.5} value={weight} onChange={(e) => setWeight(Number(e.target.value))} />
-              </div>
-              <div>
-                <label className="block text-sm">Payment</label>
-                <select className="w-full" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}>
-                  <option value="cash">Cash</option>
-                  <option value="card">Card</option>
-                  <option value="online">Online</option>
-                </select>
-              </div>
+            <div>
+              <label className="block text-sm">Payment</label>
+              <select className="w-full" value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}>
+                <option value="cash">Cash</option>
+                <option value="card">Card</option>
+                <option value="online">Online</option>
+              </select>
             </div>
 
             <div className="bg-slate-100 rounded-xl p-3">
