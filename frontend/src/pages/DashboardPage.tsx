@@ -41,8 +41,6 @@ export default function DashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [services, setServices] = useState<Service[]>([]);
-  const [dailySales, setDailySales] = useState(0);
-  const [monthlyRevenue, setMonthlyRevenue] = useState(0);
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [foldingStageOrderIds, setFoldingStageOrderIds] = useState<string[]>(() => {
@@ -100,12 +98,6 @@ export default function DashboardPage() {
       return;
     }
 
-    const [dailyRes, monthlyRes] = await Promise.allSettled([
-      api.get('/reports/daily-sales'),
-      api.get('/reports/monthly-revenue')
-    ]);
-    setDailySales(dailyRes.status === 'fulfilled' ? Number(dailyRes.value.data.data.total ?? 0) : 0);
-    setMonthlyRevenue(monthlyRes.status === 'fulfilled' ? Number(monthlyRes.value.data.data.total ?? 0) : 0);
   }, [customerId]);
 
   useEffect(() => {
@@ -166,17 +158,6 @@ export default function DashboardPage() {
     orders.forEach((order) => group[laneForOrder(order)].push(order));
     return group;
   }, [orders, foldingStageOrderIds]);
-
-  const topService = useMemo(() => {
-    const counter = new Map<string, number>();
-    orders.forEach((order) => {
-      order.items.forEach((item) => {
-        const name = item.service?.name;
-        if (name) counter.set(name, (counter.get(name) ?? 0) + 1);
-      });
-    });
-    return [...counter.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'N/A';
-  }, [orders]);
 
   const serviceByKey = useMemo(() => {
     const map = new Map<ServiceKey, Service>();
@@ -546,14 +527,6 @@ export default function DashboardPage() {
         </section>
 
         <section className="xl:col-span-8 space-y-3">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            <MetricCard title="Daily Sales" value={`₱${dailySales.toFixed(2)}`} />
-            <MetricCard title="Monthly Sales (est.)" value={`₱${monthlyRevenue.toFixed(2)}`} />
-            <MetricCard title="Top Service" value={topService} />
-            <MetricCard title="Ready for Pickup" value={`${byLane.ready.length}`} />
-            <MetricCard title="Picked up" value={`${byLane.picked_up.length}`} />
-          </div>
-
           <div className="bg-white rounded-xl p-4 shadow-sm">
             <h3 className="text-2xl font-bold mb-3">Laundry Workflow</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-2">
@@ -626,11 +599,3 @@ export default function DashboardPage() {
   );
 }
 
-function MetricCard({ title, value }: { title: string; value: string }) {
-  return (
-    <div className="bg-white rounded-xl p-3 shadow-sm">
-      <p className="text-slate-500 text-sm">{title}</p>
-      <p className="text-4xl font-bold mt-1 leading-none">{value}</p>
-    </div>
-  );
-}
