@@ -47,7 +47,8 @@ export default function CustomersPage() {
   const validateForm = () => {
     if (!form.name.trim()) return 'Customer name is required.';
     if (!/^[A-Za-z\s'-]+$/.test(form.name.trim())) return 'Customer name must contain letters only.';
-    if (form.phone && !/^\d+$/.test(form.phone)) return 'Cellphone number must contain numbers only.';
+    if (!form.phone.trim()) return 'Cellphone number is required.';
+    if (!/^\d+$/.test(form.phone)) return 'Cellphone number must contain numbers only.';
     return '';
   };
 
@@ -62,7 +63,7 @@ export default function CustomersPage() {
     setError('');
     const payload = {
       name: form.name.trim(),
-      phone: form.phone.trim() || undefined,
+      phone: form.phone.trim(),
       email: form.email.trim() || undefined
     };
 
@@ -114,7 +115,19 @@ export default function CustomersPage() {
           />
         </div>
 
-        {error && <p className="text-red-600 text-sm">{error}</p>}
+        {error && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+            <div className="w-full max-w-sm rounded-xl bg-white p-4 shadow-xl">
+              <h4 className="text-lg font-semibold text-red-600">Validation message</h4>
+              <p className="mt-2 text-sm text-slate-700">{error}</p>
+              <div className="mt-4 flex justify-end">
+                <button type="button" className="rounded bg-blue-600 px-4 py-1.5 text-white" onClick={() => setError('')}>
+                  OK
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         <form onSubmit={onSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-2">
           <input
@@ -128,6 +141,7 @@ export default function CustomersPage() {
             onChange={(e) => setForm((prev) => ({ ...prev, phone: sanitizePhone(e.target.value) }))}
             placeholder="Cellphone number"
             inputMode="numeric"
+            required
           />
           <input
             value={form.email}
