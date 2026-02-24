@@ -262,9 +262,8 @@ export default function DashboardPage() {
   const unpaidOrders = useMemo(() => {
     return orders
       .filter((order) => outstandingBalance(order) > 0)
-      .filter((order) => !customerId || order.customer?.id === customerId)
       .sort((a, b) => (a.id < b.id ? 1 : -1));
-  }, [orders, customerId]);
+  }, [orders]);
 
   useEffect(() => {
     if (!paymentOrderId && unpaidOrders[0]) {
