@@ -2,6 +2,18 @@ import { FormEvent, useEffect, useMemo, useState } from 'react';
 import api from '../services/api';
 
 type Customer = { id: string; name: string; phone?: string; email?: string };
+type OrderStatus = 'pending' | 'washing' | 'ready' | 'completed' | 'collected';
+type Order = {
+  id: string;
+  status: OrderStatus;
+  customer?: { id: string; name: string };
+};
+
+type ChatMessage = {
+  from: 'system' | 'you';
+  text: string;
+  at: string;
+};
 
 type FormState = {
   name: string;
@@ -16,15 +28,21 @@ const sanitizePhone = (value: string) => value.replace(/\D/g, '');
 
 export default function CustomersPage() {
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [search, setSearch] = useState('');
   const [form, setForm] = useState<FormState>(initialForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState('');
 
+  const [chatCustomer, setChatCustomer] = useState<Customer | null>(null);
+  const [chatDraft, setChatDraft] = useState('');
+  const [chatLogs, setChatLogs] = useState<Record<string, ChatMessage[]>>({});
+
   const load = async () => {
-    const res = await api.get('/customers');
-    setCustomers(res.data.data);
+    const [customersRes, ordersRes] = await Promise.all([api.get('/customers'), api.get('/orders?page=1&pageSize=100')]);
+    setCustomers(customersRes.data.data);
+    setOrders(ordersRes.data.data.items ?? []);
   };
 
   useEffect(() => {
@@ -43,6 +61,26 @@ export default function CustomersPage() {
       [customer.name, customer.phone, customer.email].some((field) => field?.toLowerCase().includes(key))
     );
   }, [customers, search]);
+
+  const loyaltyRows = useMemo(
+    () =>
+      filteredCustomers.map((customer) => {
+        const orderCount = orders.filter((order) => order.customer?.id === customer.id).length;
+        return { ...customer, orderCount, points: orderCount * 2 };
+      }),
+    [filteredCustomers, orders]
+  );
+
+  const smsNotifications = useMemo(
+    () =>
+      orders
+        .filter((order) => order.status === 'ready')
+        .map(
+          (order) =>
+            `SMS sent to ${order.customer?.name ?? 'customer'}: Your order ${order.id.slice(0, 6).toUpperCase()} is ready for pickup.`
+        ),
+    [orders]
+  );
 
   const validateForm = () => {
     if (!form.name.trim()) return 'Customer name is required.';
@@ -100,6 +138,27 @@ export default function CustomersPage() {
     setError('');
   };
 
+  const onOpenMessage = (customer: Customer) => {
+    setChatCustomer(customer);
+    setChatDraft(`Hi ${customer.name}, your laundry update is ready for pickup.`);
+    setChatLogs((prev) => {
+      if (prev[customer.id]) return prev;
+      return {
+        ...prev,
+        [customer.id]: [{ from: 'system', text: `Thread started with ${customer.name}.`, at: new Date().toLocaleTimeString() }]
+      };
+    });
+  };
+
+  const onSendMessage = () => {
+    if (!chatCustomer || !chatDraft.trim()) return;
+    const msg: ChatMessage = { from: 'you', text: chatDraft.trim(), at: new Date().toLocaleTimeString() };
+    setChatLogs((prev) => ({ ...prev, [chatCustomer.id]: [...(prev[chatCustomer.id] ?? []), msg] }));
+    setChatDraft('');
+  };
+
+  const activeChat = chatCustomer ? chatLogs[chatCustomer.id] ?? [] : [];
+
   return (
     <div className="space-y-4">
       <h2 className="text-2xl font-bold">Customers</h2>
@@ -151,9 +210,20 @@ export default function CustomersPage() {
           />
           <div className="flex gap-2">
             <button className="bg-blue-600 text-white px-4">{editingId ? 'Update' : 'Add'}</button>
-            {editingId && <button type="button" onClick={onCancelEdit}>Cancel</button>}
+            {editingId && (
+              <button type="button" onClick={onCancelEdit}>
+                Cancel
+              </button>
+            )}
           </div>
         </form>
+      </div>
+
+      <div className="bg-white rounded shadow p-4">
+        <h3 className="text-2xl font-bold">SMS Notifications (Auto on Ready)</h3>
+        <div className="mt-2 text-slate-500 text-sm space-y-1">
+          {smsNotifications.length ? smsNotifications.map((msg) => <p key={msg}>{msg}</p>) : <p>No SMS sent yet.</p>}
+        </div>
       </div>
 
       <div className="bg-white rounded shadow overflow-hidden">
@@ -163,25 +233,40 @@ export default function CustomersPage() {
               <th className="p-2 text-left">Name</th>
               <th className="p-2 text-left">Cellphone</th>
               <th className="p-2 text-left">Email</th>
+              <th className="p-2 text-left">Orders</th>
+              <th className="p-2 text-left">Loyalty Points</th>
               <th className="p-2 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {filteredCustomers.map((customer) => (
+            {loyaltyRows.map((customer) => (
               <tr key={customer.id} className="border-t">
                 <td className="p-2">{customer.name}</td>
                 <td className="p-2">{customer.phone ?? '-'}</td>
                 <td className="p-2">{customer.email ?? '-'}</td>
+                <td className="p-2">{customer.orderCount}</td>
+                <td className="p-2">{customer.points}</td>
                 <td className="p-2 flex gap-2">
-                  <button onClick={() => setSelectedId(customer.id)}>View</button>
-                  <button onClick={() => onEdit(customer)}>Edit</button>
-                  <button className="text-red-600" onClick={() => onDelete(customer.id)}>Delete</button>
+                  <button type="button" onClick={() => setSelectedId(customer.id)}>
+                    View
+                  </button>
+                  <button type="button" onClick={() => onEdit(customer)}>
+                    Edit
+                  </button>
+                  <button type="button" onClick={() => onOpenMessage(customer)} className="rounded bg-emerald-600 text-white px-2 py-0.5">
+                    Message
+                  </button>
+                  <button type="button" className="text-red-600" onClick={() => onDelete(customer.id)}>
+                    Delete
+                  </button>
                 </td>
               </tr>
             ))}
-            {!filteredCustomers.length && (
+            {!loyaltyRows.length && (
               <tr>
-                <td className="p-3 text-slate-500" colSpan={4}>No customers found.</td>
+                <td className="p-3 text-slate-500" colSpan={6}>
+                  No customers found.
+                </td>
               </tr>
             )}
           </tbody>
@@ -191,9 +276,53 @@ export default function CustomersPage() {
       {selectedCustomer && (
         <div className="bg-white rounded shadow p-4">
           <h3 className="text-lg font-semibold mb-2">Customer Details</h3>
-          <p><strong>Name:</strong> {selectedCustomer.name}</p>
-          <p><strong>Cellphone:</strong> {selectedCustomer.phone ?? '-'}</p>
-          <p><strong>Email:</strong> {selectedCustomer.email ?? '-'}</p>
+          <p>
+            <strong>Name:</strong> {selectedCustomer.name}
+          </p>
+          <p>
+            <strong>Cellphone:</strong> {selectedCustomer.phone ?? '-'}
+          </p>
+          <p>
+            <strong>Email:</strong> {selectedCustomer.email ?? '-'}
+          </p>
+        </div>
+      )}
+
+      {chatCustomer && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-lg rounded-xl bg-white shadow-xl overflow-hidden">
+            <div className="bg-slate-900 text-white px-4 py-3 flex items-center justify-between">
+              <div>
+                <p className="font-semibold">Messaging App</p>
+                <p className="text-xs text-slate-200">{chatCustomer.name}</p>
+              </div>
+              <button type="button" className="text-sm" onClick={() => setChatCustomer(null)}>
+                Close
+              </button>
+            </div>
+
+            <div className="h-72 overflow-y-auto bg-slate-50 p-3 space-y-2">
+              {activeChat.map((msg, idx) => (
+                <div key={`${msg.at}-${idx}`} className={`max-w-[80%] rounded-lg px-3 py-2 text-sm ${msg.from === 'you' ? 'ml-auto bg-indigo-600 text-white' : 'bg-white border'}`}>
+                  <p>{msg.text}</p>
+                  <p className={`text-[10px] mt-1 ${msg.from === 'you' ? 'text-indigo-100' : 'text-slate-400'}`}>{msg.at}</p>
+                </div>
+              ))}
+              {!activeChat.length && <p className="text-xs text-slate-500">No messages yet.</p>}
+            </div>
+
+            <div className="border-t p-3 flex gap-2">
+              <input
+                className="flex-1"
+                value={chatDraft}
+                onChange={(e) => setChatDraft(e.target.value)}
+                placeholder="Type your message"
+              />
+              <button type="button" className="rounded bg-indigo-600 text-white px-4" onClick={onSendMessage}>
+                Send
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

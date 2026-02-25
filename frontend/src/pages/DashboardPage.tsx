@@ -244,24 +244,6 @@ export default function DashboardPage() {
     ]);
   };
 
-  const smsNotifications = useMemo(
-    () =>
-      byLane.ready.map(
-        (order) =>
-          `SMS sent to ${order.customer?.name ?? 'customer'}: Your order ${order.id.slice(0, 6).toUpperCase()} is ready for pickup.`
-      ),
-    [byLane.ready]
-  );
-
-  const loyaltyRows = useMemo(
-    () =>
-      customers.map((customer) => {
-        const orderCount = orders.filter((order) => order.customer?.id === customer.id).length;
-        return { ...customer, orderCount, points: orderCount * 2 };
-      }),
-    [customers, orders]
-  );
-
   const selectedCustomer = useMemo(() => customers.find((customer) => customer.id === customerId), [customerId, customers]);
 
   const filteredCustomers = useMemo(() => {
@@ -621,39 +603,6 @@ export default function DashboardPage() {
                   </div>
                 </div>
               ))}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 shadow-sm">
-            <h3 className="text-2xl font-bold">SMS Notifications (Auto on Ready)</h3>
-            <div className="mt-2 text-slate-500 text-sm space-y-1">
-              {smsNotifications.length ? smsNotifications.map((msg) => <p key={msg}>{msg}</p>) : <p>No SMS sent yet.</p>}
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 shadow-sm">
-            <h3 className="text-2xl font-bold">Customers & Loyalty</h3>
-            <div className="overflow-x-auto mt-2">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="text-left border-b">
-                    <th className="py-1">Name</th>
-                    <th className="py-1">Phone</th>
-                    <th className="py-1">Orders</th>
-                    <th className="py-1">Loyalty Points</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {loyaltyRows.map((row) => (
-                    <tr key={row.id} className="border-b">
-                      <td className="py-1">{row.name}</td>
-                      <td className="py-1">{row.phone ?? '-'}</td>
-                      <td className="py-1">{row.orderCount}</td>
-                      <td className="py-1">{row.points}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
             </div>
           </div>
         </section>
