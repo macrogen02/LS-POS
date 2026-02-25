@@ -368,6 +368,8 @@ export default function DashboardPage() {
     return labels.join(' + ') || 'Laundry Service';
   };
 
+  const isCollectionPaymentError = error.toLowerCase().includes('order cannot be collected without full payment');
+
   const advanceOrder = async (order: Order) => {
     if (order.status === 'completed' && hasFoldService(order) && !isInFoldingStage(order)) {
       setFoldingStageOrderIds((prev) => (prev.includes(order.id) ? prev : [...prev, order.id]));
@@ -394,7 +396,20 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-3">
-      {error && <p className="text-red-600 text-sm">{error}</p>}
+      {isCollectionPaymentError && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl">
+            <h3 className="text-lg font-semibold text-slate-900">Unable to hand over order</h3>
+            <p className="mt-2 text-sm text-slate-600">{error}</p>
+            <div className="mt-4 flex justify-end">
+              <button type="button" className="rounded bg-slate-900 text-white px-4 py-1.5" onClick={() => setError('')}>
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {error && !isCollectionPaymentError && <p className="text-red-600 text-sm">{error}</p>}
 
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-3">
         <section className="xl:col-span-4 bg-white rounded-xl p-4 shadow-sm space-y-3">
