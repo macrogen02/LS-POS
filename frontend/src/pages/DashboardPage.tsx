@@ -13,6 +13,7 @@ type Order = {
   id: string;
   status: OrderStatus;
   totalPrice: number | string;
+  createdAt: string;
   customer?: { id: string; name: string };
   payments: Array<{ amount: number | string }>;
   items: Array<{ service?: { id: string; name: string } }>;
@@ -36,6 +37,7 @@ const serviceButtons: Array<{ key: ServiceKey; label: string; rate: number }> = 
 const FOLDING_STAGE_KEY = 'dashboard-folding-stage-order-ids';
 const MIN_MACHINE_LOAD_KG = 1;
 const MAX_MACHINE_LOAD_KG = 15;
+const PICKED_UP_PAGE_SIZE = 4;
 
 export default function DashboardPage() {
   const [orders, setOrders] = useState<Order[]>([]);
@@ -61,6 +63,7 @@ export default function DashboardPage() {
     { id: 1, selectedServices: { wash: true, dry: false, fold: false }, weight: 3 }
   ]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [pickedUpPage, setPickedUpPage] = useState(1);
 
   const loadDashboard = useCallback(async () => {
     setError('');
@@ -158,6 +161,31 @@ export default function DashboardPage() {
     orders.forEach((order) => group[laneForOrder(order)].push(order));
     return group;
   }, [orders, foldingStageOrderIds]);
+
+  const isCurrentDate = (isoDate: string) => {
+    const dt = new Date(isoDate);
+    const now = new Date();
+    return dt.getFullYear() === now.getFullYear() && dt.getMonth() === now.getMonth() && dt.getDate() === now.getDate();
+  };
+
+  const pickedUpTodaySorted = useMemo(
+    () =>
+      byLane.picked_up
+        .filter((order) => isCurrentDate(order.createdAt))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    [byLane.picked_up]
+  );
+
+  const pickedUpTotalPages = Math.max(1, Math.ceil(pickedUpTodaySorted.length / PICKED_UP_PAGE_SIZE));
+
+  useEffect(() => {
+    setPickedUpPage((prev) => Math.min(prev, pickedUpTotalPages));
+  }, [pickedUpTotalPages]);
+
+  const pickedUpPageItems = useMemo(() => {
+    const start = (pickedUpPage - 1) * PICKED_UP_PAGE_SIZE;
+    return pickedUpTodaySorted.slice(start, start + PICKED_UP_PAGE_SIZE);
+  }, [pickedUpPage, pickedUpTodaySorted]);
 
   const serviceByKey = useMemo(() => {
     const map = new Map<ServiceKey, Service>();
@@ -548,7 +576,7 @@ export default function DashboardPage() {
                 <div key={lane.key} className="bg-slate-100 rounded-lg p-2 min-h-[240px]">
                   <h4 className="font-medium mb-2">{lane.label}</h4>
                   <div className="space-y-2">
-                    {byLane[lane.key].map((order) => (
+                    {(lane.key === 'picked_up' ? pickedUpPageItems : byLane[lane.key]).map((order) => (
                       <article key={order.id} className="bg-white border rounded p-2 text-sm leading-tight">
                         <p className="font-medium">L-{order.id.slice(0, 4).toUpperCase()}</p>
                         <p>{order.customer?.name ?? 'Walk-in'}</p>
@@ -568,7 +596,28 @@ export default function DashboardPage() {
                         )}
                       </article>
                     ))}
-                    {!byLane[lane.key].length && <p className="text-xs text-slate-500">No orders</p>}
+                    {!(lane.key === 'picked_up' ? pickedUpPageItems : byLane[lane.key]).length && <p className="text-xs text-slate-500">No orders</p>}
+                    {lane.key === 'picked_up' && pickedUpTotalPages > 1 && (
+                      <div className="flex items-center justify-between pt-1">
+                        <button
+                          type="button"
+                          className="text-xs rounded border px-2 py-1 disabled:opacity-50"
+                          disabled={pickedUpPage <= 1}
+                          onClick={() => setPickedUpPage((prev) => Math.max(1, prev - 1))}
+                        >
+                          Prev
+                        </button>
+                        <span className="text-xs text-slate-500">Page {pickedUpPage} / {pickedUpTotalPages}</span>
+                        <button
+                          type="button"
+                          className="text-xs rounded border px-2 py-1 disabled:opacity-50"
+                          disabled={pickedUpPage >= pickedUpTotalPages}
+                          onClick={() => setPickedUpPage((prev) => Math.min(pickedUpTotalPages, prev + 1))}
+                        >
+                          Next
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}
